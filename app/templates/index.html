@@ -11,7 +11,7 @@
       <div class="card">
         <h3>{{ plan.label }}</h3>
         <p>{{ plan.blurb }}</p>
-        <a href="/buy" class="btn">Choose {{ plan.label }}</a>
+        <a href="/buy?plan={{ slug }}" class="btn">Choose {{ plan.label }}</a>
       </div>
     {% endfor %}
   </div>

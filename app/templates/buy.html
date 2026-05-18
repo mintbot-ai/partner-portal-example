@@ -8,7 +8,7 @@
     <label for="plan">Plan</label>
     <select id="plan" name="plan" required>
       {% for slug, plan in plans.items() %}
-        <option value="{{ slug }}">{{ plan.label }} — {{ plan.blurb }}</option>
+        <option value="{{ slug }}"{% if selected == slug %} selected{% endif %}>{{ plan.label }} — {{ plan.blurb }}</option>
       {% endfor %}
     </select>
 

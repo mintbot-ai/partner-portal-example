@@ -41,6 +41,17 @@ async def lifespan(app: FastAPI):
         "%s portal started — talking to %s",
         settings.partner_brand, settings.mintoffice_api_url,
     )
+    if not settings.public_base_url.startswith("https://"):
+        # MintOffice rejects non-https success_url / cancel_url before it
+        # even tries Stripe — surface this at startup so the operator
+        # doesn't have to debug a 422 on the first /buy attempt.
+        logger.warning(
+            "PUBLIC_BASE_URL=%s is not https — MintOffice will reject "
+            "/orders requests built off it. Front the portal with HTTPS "
+            "(Cloudflare Tunnel / Tailscale Funnel / nginx + Let's Encrypt) "
+            "before testing the full checkout flow.",
+            settings.public_base_url,
+        )
     yield
 
 
@@ -94,10 +105,16 @@ def landing(request: Request) -> HTMLResponse:
 
 
 @app.get("/buy", response_class=HTMLResponse)
-def buy_form(request: Request) -> HTMLResponse:
+def buy_form(request: Request, plan: str | None = None) -> HTMLResponse:
+    """Plan picker. ``?plan=<slug>`` pre-selects a card so the landing
+    page's per-plan CTA lands the customer on the right option."""
+    selected = plan if plan in PLANS else None
     return templates.TemplateResponse(
         request, "buy.html",
-        {"brand": settings.partner_brand, "plans": PLANS, "error": None},
+        {
+            "brand": settings.partner_brand, "plans": PLANS,
+            "selected": selected, "error": None,
+        },
     )
 
 
@@ -112,6 +129,7 @@ def buy_submit(
         return templates.TemplateResponse(
             request, "buy.html",
             {"brand": settings.partner_brand, "plans": PLANS,
+             "selected": None,
              "error": "Pick a valid plan, please."},
             status_code=400,
         )
@@ -135,7 +153,8 @@ def buy_submit(
         ) or f"MintOffice returned {e.status_code}."
         return templates.TemplateResponse(
             request, "buy.html",
-            {"brand": settings.partner_brand, "plans": PLANS, "error": msg},
+            {"brand": settings.partner_brand, "plans": PLANS,
+             "selected": plan, "error": msg},
             status_code=502,
         )
     except Exception:  # noqa: BLE001
@@ -143,6 +162,7 @@ def buy_submit(
         return templates.TemplateResponse(
             request, "buy.html",
             {"brand": settings.partner_brand, "plans": PLANS,
+             "selected": plan,
              "error": "Could not reach checkout — please try again in a minute."},
             status_code=502,
         )
@@ -150,6 +170,7 @@ def buy_submit(
         return templates.TemplateResponse(
             request, "buy.html",
             {"brand": settings.partner_brand, "plans": PLANS,
+             "selected": plan,
              "error": "MintOffice didn't return a checkout URL."},
             status_code=502,
         )
@@ -193,13 +214,13 @@ async def receive_webhook(
     if not x_mintbot_event_id or not x_mintbot_event_type:
         raise HTTPException(status_code=400, detail="missing event headers")
     try:
-        raw.decode("utf-8")
+        body_text = raw.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="non-utf-8 body")
     inserted = db.store_event(
         event_id=x_mintbot_event_id,
         event_type=x_mintbot_event_type,
-        payload=raw.decode("utf-8"),
+        payload=body_text,
     )
     logger.info(
         "Webhook %s id=%s — %s",

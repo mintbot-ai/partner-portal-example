@@ -69,6 +69,23 @@ def test_landing_lists_all_plans(app_with_tmp_db):
         assert label in r.text
 
 
+def test_buy_pre_selects_plan_from_query_string(app_with_tmp_db):
+    client = TestClient(app_with_tmp_db.app)
+    r = client.get("/buy?plan=basic")
+    assert r.status_code == 200
+    # The matching <option> carries the selected attribute.
+    assert 'value="basic" selected' in r.text
+
+
+def test_buy_query_string_with_unknown_plan_is_ignored(app_with_tmp_db):
+    """An unknown ``?plan=`` slug must not blow up — just render the form
+    with nothing pre-selected so the customer can still pick."""
+    client = TestClient(app_with_tmp_db.app)
+    r = client.get("/buy?plan=does-not-exist")
+    assert r.status_code == 200
+    assert "selected" not in r.text
+
+
 def test_admin_requires_basic_auth(app_with_tmp_db):
     client = TestClient(app_with_tmp_db.app)
     r = client.get("/admin")
