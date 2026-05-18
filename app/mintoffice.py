@@ -2,7 +2,7 @@
 
 Only the endpoints this portal actually exercises are wrapped — keep it
 intentionally narrow. Add more as you need them. Full API reference:
-the public mintbot docs at https://mintbot.how/docs/partner-api/.
+the public mintbot docs at https://mintbot.how/partner-api/.
 """
 from __future__ import annotations
 

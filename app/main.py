@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title=f"{settings.partner_brand} Portal",
+    title=f"{settings.partner_brand} — Brand Partner reference portal",
     docs_url=None, redoc_url=None,
     lifespan=lifespan,
 )
