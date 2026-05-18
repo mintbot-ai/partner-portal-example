@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Pick a plan</h2>
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+  <form method="post" action="/buy" class="card">
+    <label for="plan">Plan</label>
+    <select id="plan" name="plan" required>
+      {% for slug, plan in plans.items() %}
+        <option value="{{ slug }}">{{ plan.label }} — {{ plan.blurb }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="language">Panel language</label>
+    <select id="language" name="language">
+      <option value="en">English</option>
+      <option value="et">Eesti</option>
+      <option value="es">Español</option>
+      <option value="ru">Русский</option>
+    </select>
+
+    <p style="margin-top:1.5rem">
+      <button type="submit" class="btn">Continue to checkout →</button>
+    </p>
+    <p class="muted" style="margin-top:0.5rem">
+      You'll be redirected to a secure payment page and returned here once
+      payment completes.
+    </p>
+  </form>
+{% endblock %}

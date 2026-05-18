@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Your own AI assistant, ready in minutes.</h2>
+  <p class="muted">
+    Pick a plan and we'll spin up a private {{ brand }} assistant — your
+    own server, your own panel, your own model credit.
+  </p>
+
+  <div class="grid">
+    {% for slug, plan in plans.items() %}
+      <div class="card">
+        <h3>{{ plan.label }}</h3>
+        <p>{{ plan.blurb }}</p>
+        <a href="/buy" class="btn">Choose {{ plan.label }}</a>
+      </div>
+    {% endfor %}
+  </div>
+{% endblock %}

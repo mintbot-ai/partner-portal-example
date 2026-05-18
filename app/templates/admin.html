@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Admin — {{ brand }}{% endblock %}
+{% block content %}
+  <h2>Received webhook events</h2>
+  <p class="muted">
+    Showing the {{ events|length }} most recent inbound events. Bottom up
+    is oldest. The signature was verified before storage.
+  </p>
+  {% if not events %}
+    <div class="card">
+      <p>No events yet. Try placing a test order from <a href="/buy">/buy</a>.</p>
+    </div>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Type</th>
+          <th>Event ID</th>
+          <th>Received</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ev in events %}
+          <tr>
+            <td>{{ ev.id }}</td>
+            <td><code>{{ ev.event_type }}</code></td>
+            <td><code>{{ ev.event_id }}</code></td>
+            <td>{{ ev.received_at }}</td>
+          </tr>
+          <tr>
+            <td colspan="4"><pre>{{ ev.pretty }}</pre></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+{% endblock %}

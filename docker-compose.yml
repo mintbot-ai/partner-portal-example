@@ -1,0 +1,13 @@
+services:
+  portal:
+    build: .
+    container_name: partner-portal-example
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - portal-data:/data
+
+volumes:
+  portal-data:
