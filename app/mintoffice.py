@@ -25,6 +25,40 @@ class MintOfficeError(RuntimeError):
         super().__init__(f"MintOffice API error {status_code}: {body!r}")
 
 
+def format_error(e: "MintOfficeError") -> str:
+    """Best-effort human-readable explanation for a MintOfficeError.
+
+    MintOffice currently emits two response shapes for failures:
+
+    - Business errors: ``{"error": {"code": "...", "message": "..."}}``
+    - FastAPI validation (422): ``{"detail": [{"loc": [...], "msg": "..."}]}``
+
+    Surface whichever applies; fall back to ``MintOffice returned <code>.``
+    """
+    body = e.body if isinstance(e.body, dict) else {}
+    err = body.get("error")
+    if isinstance(err, dict) and err.get("message"):
+        return str(err["message"])
+    detail = body.get("detail")
+    if isinstance(detail, list) and detail:
+        parts = []
+        for item in detail:
+            if not isinstance(item, dict):
+                continue
+            msg = item.get("msg") or ""
+            loc = item.get("loc") or []
+            field = loc[-1] if loc else None
+            if field and msg:
+                parts.append(f"{field}: {msg}")
+            elif msg:
+                parts.append(str(msg))
+        if parts:
+            return " · ".join(parts)
+    if isinstance(detail, str) and detail:
+        return detail
+    return f"MintOffice returned {e.status_code}."
+
+
 @dataclass(frozen=True)
 class CreatedOrder:
     id: int

@@ -98,9 +98,28 @@
       border-radius: 0.5rem;
       font-size: 1rem;
     }
+    .test-mode-banner {
+      background: #fbbf24;
+      color: #1f2937;
+      text-align: center;
+      padding: 0.5rem 1rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .test-mode-banner code {
+      background: rgba(0, 0, 0, 0.15);
+      padding: 0.05rem 0.35rem;
+      border-radius: 0.25rem;
+    }
   </style>
 </head>
 <body>
+  {% if test_mode %}
+    <div class="test-mode-banner">
+      TEST MODE — billing through MintOffice DEV (<code>{{ mintoffice_api_url }}</code>). No real charges.
+    </div>
+  {% endif %}
   <header>
     <h1><a href="/">{{ brand }}</a></h1>
   </header>

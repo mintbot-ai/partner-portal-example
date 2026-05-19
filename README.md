@@ -44,8 +44,10 @@ by hand, or as a starting point for your own portal.
 - Python 3.13+ (or just Docker)
 - A MintOffice **Partner API key** — generate yours at
   [`mint.mintbot.ai/dashboard#api-access`](https://mint.mintbot.ai/dashboard#api-access)
-- The **webhook secret** for that partner (shown once at creation; rotate
-  in the same dashboard if you lose it)
+- The **webhook signing secret** for that partner (optional — only needed
+  once you set a Webhook URL on your partner row). The dashboard generates
+  it automatically; copy it to `.env` then. Until you do, the receiver
+  path will 401 every event, but the rest of the portal works.
 
 ## Run locally
 
@@ -131,11 +133,42 @@ partner-portal-example/
 │   ├── webhooks.py      signature verify
 │   ├── db.py            SQLite helpers
 │   └── templates/       Jinja2 templates (AcmeAI branding)
+├── scripts/
+│   └── send_test_webhook.py   craft a signed event from the CLI
 ├── tests/               pytest — webhook + buy flow with mocked httpx
 ├── Dockerfile
 ├── docker-compose.yml
 └── .env.example
 ```
+
+## Testing the webhook receiver locally
+
+Crafting an HMAC-signed body by hand is annoying — use the bundled helper
+instead:
+
+```bash
+# Reads MINTOFFICE_WEBHOOK_SECRET from .env, posts a synthetic order.paid
+# event to the local receiver, prints the response.
+python scripts/send_test_webhook.py
+
+# Replay the same event id to verify your idempotency handling.
+python scripts/send_test_webhook.py --id evt_replay_me
+
+# Force the stale-timestamp branch (>5 minute skew → must be rejected).
+python scripts/send_test_webhook.py --skew 1000
+```
+
+`python scripts/send_test_webhook.py --help` lists every flag (custom URL,
+event type, JSON payload, etc.). Useful for smoke-testing the receiver
+during rebranding without round-tripping through Stripe / MintOffice.
+
+## Test-mode banner
+
+When `MINTOFFICE_API_URL` points at `mint.mintbot.dev` (the default), every
+page renders a yellow `TEST MODE` strip at the top so customers can't be
+shown a perfectly normal-looking checkout that quietly bills via the dev
+environment. Switching to `https://mint.mintbot.ai` makes the banner
+disappear — production traffic looks clean.
 
 ## Branding
 

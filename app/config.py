@@ -36,7 +36,7 @@ def _load() -> Settings:
         ).rstrip("/"),
         admin_username=os.environ.get("ADMIN_USERNAME", "admin").strip(),
         admin_password=os.environ.get("ADMIN_PASSWORD", "").strip(),
-        db_path=os.environ.get("DB_PATH", "/data/portal.db").strip(),
+        db_path=os.environ.get("DB_PATH", "portal.db").strip(),
     )
 
 

@@ -33,6 +33,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+# When the portal is pointed at the dev MintOffice (mint.mintbot.dev) we
+# render a "TEST MODE" strip at the top of every page. This is a guardrail
+# for partners running rebranding work — without it, a customer can be
+# served a perfectly normal-looking checkout that quietly bills via the
+# dev environment.
+_test_mode = ".mintbot.dev" in settings.mintoffice_api_url
+templates.env.globals["test_mode"] = _test_mode
+templates.env.globals["mintoffice_api_url"] = settings.mintoffice_api_url
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -51,6 +60,17 @@ async def lifespan(app: FastAPI):
             "(Cloudflare Tunnel / Tailscale Funnel / nginx + Let's Encrypt) "
             "before testing the full checkout flow.",
             settings.public_base_url,
+        )
+    if not settings.mintoffice_webhook_secret:
+        # Webhook URL is optional in MintOffice, so an empty secret is a
+        # legitimate "I haven't wired up webhooks yet" state. But the
+        # receiver path still listens, and will 401 every event until a
+        # secret is configured — flag that explicitly.
+        logger.warning(
+            "MINTOFFICE_WEBHOOK_SECRET is empty — /webhooks/mintoffice will "
+            "reject all inbound events. Set a Webhook URL on your partner "
+            "row in MintOffice and paste the generated secret into .env to "
+            "enable event ingest."
         )
     yield
 
@@ -147,10 +167,7 @@ def buy_submit(
         )
     except mintoffice.MintOfficeError as e:
         logger.warning("MintOffice rejected order: %s", e)
-        msg = (
-            (e.body.get("error") or {}).get("message")
-            if isinstance(e.body, dict) else None
-        ) or f"MintOffice returned {e.status_code}."
+        msg = mintoffice.format_error(e)
         return templates.TemplateResponse(
             request, "buy.html",
             {"brand": settings.partner_brand, "plans": PLANS,
