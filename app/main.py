@@ -135,6 +135,13 @@ app.add_middleware(SecurityHeadersMiddleware)
 # ``duration_days`` is one of 1, 7, 30, 90, 365. Credit is no longer
 # baked into the plan — the customer picks an LLM credit bundle on the
 # /buy form (or "no credit / VPS only" to bring their own API key).
+#
+# Monthly tier note: ``duration_days=30`` is the internal DB-clock budget
+# (used by mintbot to set the agent's local expiry date). On the upstream
+# VPS provider (SporeStack) the actual server runs on a "monthly" billing
+# cycle — one billing period per top-up, not literally 30 calendar days.
+# Mintbot's deploy worker translates this for us; partners can keep
+# advertising "1 month" in customer-facing labels.
 PLANS = {
     "trial": {
         "label": "Trial · 24h",
@@ -145,7 +152,7 @@ PLANS = {
         "featured": False,
     },
     "s1": {
-        "label": "Basic · 30 days",
+        "label": "Basic · 1 month",
         "tier": "s1",
         "duration_days": 30,
         "price_cents": 1500,
@@ -153,7 +160,7 @@ PLANS = {
         "featured": False,
     },
     "s2": {
-        "label": "Pro · 30 days",
+        "label": "Pro · 1 month",
         "tier": "s2",
         "duration_days": 30,
         "price_cents": 3900,

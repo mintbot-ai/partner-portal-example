@@ -154,7 +154,7 @@ def create_order(
     ``product_name`` becomes the Stripe Checkout line-item title shown to
     the customer — leave it None and MintOffice falls back to a generic
     ``S2 · 30d``-style label. Pass something branded like
-    ``"AcmeAI Assistant · 30 days"`` for a white-label checkout page.
+    ``"AcmeAI Assistant · 1 month"`` for a white-label checkout page.
 
     Pass ``idempotency_key`` when the caller wants to make a particular
     submit idempotent across the network boundary (e.g. a hidden form
