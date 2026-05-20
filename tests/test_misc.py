@@ -17,6 +17,11 @@ def test_security_headers_present_on_landing(app_with_tmp_db):
     csp = r.headers.get("content-security-policy", "")
     assert "default-src 'self'" in csp
     assert "frame-ancestors 'none'" in csp
+    # form-action must allow Stripe so the /buy 303 to checkout.stripe.com
+    # is not blocked by the browser. Browsers apply form-action across
+    # redirects from a form submission, so 'self' alone would silently
+    # cancel the navigation.
+    assert "form-action 'self' https://checkout.stripe.com" in csp
 
 
 def test_healthz_reports_db_state(app_with_tmp_db):

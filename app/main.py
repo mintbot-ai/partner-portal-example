@@ -116,7 +116,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "connect-src 'self'; "
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
-            "form-action 'self'",
+            "form-action 'self' https://checkout.stripe.com",
         )
         if request.url.scheme == "https":
             response.headers.setdefault(
