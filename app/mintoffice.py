@@ -37,6 +37,13 @@ class MintOfficeError(RuntimeError):
         super().__init__(f"MintOffice API error {status_code}: {body!r}")
 
 
+class MintOfficeConfigError(RuntimeError):
+    """Raised when the portal isn't wired up to call MintOffice at all
+    (e.g. ``MINTOFFICE_API_KEY`` missing from .env). Distinct from
+    ``MintOfficeError`` because the fault is on our side, not on the wire
+    — the right operator response is "fix .env and restart", not "retry"."""
+
+
 def format_error(e: "MintOfficeError") -> str:
     """Best-effort human-readable explanation for a MintOfficeError.
 
@@ -82,7 +89,7 @@ class CreatedOrder:
 
 def _client() -> httpx.Client:
     if not settings.mintoffice_api_key:
-        raise RuntimeError(
+        raise MintOfficeConfigError(
             "MINTOFFICE_API_KEY is empty — set it in .env before calling MintOffice"
         )
     return httpx.Client(

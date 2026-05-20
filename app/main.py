@@ -21,6 +21,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Form, Header, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -239,17 +240,35 @@ def _render(request: Request, template: str, ctx: dict, *, status_code: int = 20
 
 @app.get("/healthz")
 def healthz() -> Response:
+    """Liveness + configuration probe.
+
+    ``checks.db`` is a real SQLite read+write. ``checks.mintoffice_api_key``
+    is a pure config check ("is the bearer token set in .env") — it does
+    NOT call MintOffice, so a MintOffice outage won't make this portal
+    flap. Detecting a missing/empty key is the case that bit us in prod
+    (rotation cleared .env, POST /buy started 502'ing) and is exactly
+    what generic uptime monitors miss when they only watch the landing
+    page or DB.
+
+    Returns 503 when any check fails so a vanilla "GET /healthz, expect
+    2xx" monitor catches both DB outages and configuration drift.
+    """
     db_ok = db.healthcheck()
+    api_key_state = "configured" if settings.mintoffice_api_key else "missing"
+    ok = db_ok and api_key_state == "configured"
     payload = {
-        "ok": db_ok,
+        "ok": ok,
         "brand": settings.partner_brand,
         "version": __version__,
-        "checks": {"db": db_ok},
+        "checks": {
+            "db": db_ok,
+            "mintoffice_api_key": api_key_state,
+        },
     }
     return Response(
         content=json.dumps(payload),
         media_type="application/json",
-        status_code=200 if db_ok else 503,
+        status_code=200 if ok else 503,
     )
 
 
@@ -311,12 +330,49 @@ def buy_submit(
             product_name=f"{settings.partner_brand} {spec['label']}",
             idempotency_key=idempotency_key_form or None,
         )
+    except mintoffice.MintOfficeConfigError as e:
+        # MINTOFFICE_API_KEY missing from .env — the portal can't even
+        # try to call MintOffice. Surface a maintenance message to the
+        # customer (the truthful "could not reach" message would point
+        # them at a transient retry that will never succeed). Log loud
+        # so the operator notices: this won't fix itself.
+        logger.error("Portal misconfigured — cannot call MintOffice: %s", e)
+        return _render(request, "buy.html", {
+            "plans": PLANS, "selected": plan,
+            "credit_options": _get_credit_options(),
+            "error": "Checkout is temporarily unavailable — please try again shortly.",
+        }, status_code=503)
     except mintoffice.MintOfficeError as e:
+        # Distinguish credential failures (401/403) from genuine API
+        # rejections (422 validation, 409 conflicts, etc.). A revoked or
+        # mistyped key looks like a transient failure to the customer
+        # but needs an operator to fix — same maintenance message as
+        # the config branch, but with a flagged log line.
+        if e.status_code in (401, 403):
+            logger.error(
+                "MintOffice rejected our credentials (status=%s, body=%r) — "
+                "rotate MINTOFFICE_API_KEY from the partner dashboard",
+                e.status_code, e.body,
+            )
+            return _render(request, "buy.html", {
+                "plans": PLANS, "selected": plan,
+                "credit_options": _get_credit_options(),
+                "error": "Checkout is temporarily unavailable — please try again shortly.",
+            }, status_code=503)
         logger.warning("MintOffice rejected order: %s", e)
         return _render(request, "buy.html", {
             "plans": PLANS, "selected": plan,
             "credit_options": _get_credit_options(),
             "error": mintoffice.format_error(e),
+        }, status_code=502)
+    except (httpx.TransportError, httpx.TimeoutException) as e:
+        # Pure network/transport problem — DNS, TCP, TLS, timeout. The
+        # original "could not reach checkout" message is accurate here.
+        logger.warning("MintOffice transport failure: %s: %s", type(e).__name__, e)
+        return _render(request, "buy.html", {
+            "plans": PLANS, "selected": plan,
+            "credit_options": _get_credit_options(),
+            "error": "Could not reach checkout — please try again in a minute.",
         }, status_code=502)
     except Exception:  # noqa: BLE001
         logger.exception("MintOffice call blew up")

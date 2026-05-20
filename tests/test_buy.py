@@ -113,6 +113,62 @@ def test_buy_post_accepts_zero_credit_even_when_options_set(client, httpx_mock):
     assert resp.status_code == 303, resp.text
 
 
+def test_buy_post_missing_api_key_shows_maintenance(client, monkeypatch, caplog):
+    """Regression — when MINTOFFICE_API_KEY is empty, the customer must
+    see a maintenance message (503), NOT the misleading "could not
+    reach checkout" transport-error message. And the operator must see
+    a loud ERROR log so monitoring picks it up.
+
+    Uses ``credit_usd=0`` (VPS-only) so we bypass the credit-allowlist
+    guard — the partner-settings fetch can't help here anyway, since
+    that call also needs the API key.
+    """
+    import logging
+    from app import main as main_mod
+    monkeypatch.setattr(main_mod.settings, "mintoffice_api_key", "")
+    with caplog.at_level(logging.ERROR, logger="partner_portal"):
+        resp = client.post(
+            "/buy",
+            data={"plan": "s1", "credit_usd": "0"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 503, resp.text
+    assert "temporarily unavailable" in resp.text
+    assert "could not reach checkout" not in resp.text.lower()
+    assert any(
+        "Portal misconfigured" in rec.message for rec in caplog.records
+    ), [r.message for r in caplog.records]
+
+
+def test_buy_post_401_logs_credential_failure(client, httpx_mock, caplog):
+    """Regression — a revoked or mistyped API key returns 401 from
+    MintOffice. The customer sees the maintenance message (503), not
+    the format_error chatter; the operator sees a flagged log line so
+    rotation is obvious from grep."""
+    import logging
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [10]},
+        status_code=200,
+    )
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/orders",
+        json={"error": {"code": "invalid_api_key", "message": "Rotate from the MintOffice dashboard"}},
+        status_code=401,
+    )
+    with caplog.at_level(logging.ERROR, logger="partner_portal"):
+        resp = client.post(
+            "/buy",
+            data={"plan": "s1", "credit_usd": "10"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 503, resp.text
+    assert "temporarily unavailable" in resp.text
+    assert any(
+        "rejected our credentials" in rec.message for rec in caplog.records
+    ), [r.message for r in caplog.records]
+
+
 def test_credit_cache_sticky_on_failure(client, httpx_mock):
     """Regression — if the first MintOffice fetch succeeds and the next
     one fails, the cache must keep the previously-seen good value

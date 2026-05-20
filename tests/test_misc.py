@@ -26,6 +26,7 @@ def test_healthz_reports_db_state(app_with_tmp_db):
     body = r.json()
     assert body["ok"] is True
     assert body["checks"]["db"] is True
+    assert body["checks"]["mintoffice_api_key"] == "configured"
     assert body["version"]
     assert body["brand"]
 
@@ -38,6 +39,20 @@ def test_healthz_503_when_db_broken(app_with_tmp_db, monkeypatch):
     body = r.json()
     assert body["ok"] is False
     assert body["checks"]["db"] is False
+
+
+def test_healthz_503_when_mintoffice_api_key_missing(app_with_tmp_db, monkeypatch):
+    """Regression — the rotation-cleared-.env incident on agent99.cc.
+    A monitor that only watches the landing page misses this; /healthz
+    must surface it as a hard 503 so generic uptime alerts fire."""
+    monkeypatch.setattr(app_with_tmp_db.settings, "mintoffice_api_key", "")
+    client = TestClient(app_with_tmp_db.app)
+    r = client.get("/healthz")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["ok"] is False
+    assert body["checks"]["db"] is True
+    assert body["checks"]["mintoffice_api_key"] == "missing"
 
 
 def test_404_renders_branded_html_for_browsers(app_with_tmp_db):
