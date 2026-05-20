@@ -127,39 +127,52 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 
-# Sample plans. Map the visible name → MintOffice tier + duration + the
-# customer-facing price you want Stripe to charge. Edit freely; the only
-# constraint is that ``tier`` is one of MintOffice's allowed tiers
-# (trial, s1, s2, s4) and ``duration_days`` is one of 1, 7, 30, 90, 365.
+# Sample plans. Keys are the MintOffice tier slug so ``?plan=s1`` deep
+# links route correctly. Edit freely; the only constraint is that
+# ``tier`` is one of MintOffice's allowed tiers (trial, s1, s2, s4) and
+# ``duration_days`` is one of 1, 7, 30, 90, 365. Credit is no longer
+# baked into the plan — the customer picks an LLM credit bundle on the
+# /buy form (or "no credit / VPS only" to bring their own API key).
 PLANS = {
     "trial": {
         "label": "Trial · 24h",
         "tier": "trial",
         "duration_days": 1,
-        "credit_usd": 0,
         "price_cents": 0,
-        "blurb": "One day to kick the tires. No card-locked credit.",
+        "blurb": "One day to kick the tires.",
         "featured": False,
     },
-    "basic": {
+    "s1": {
         "label": "Basic · 30 days",
         "tier": "s1",
         "duration_days": 30,
-        "credit_usd": 5,
         "price_cents": 1500,
-        "blurb": "A month of assistant time. Includes $5 of usage credit.",
+        "blurb": "A month of assistant time.",
         "featured": False,
     },
-    "pro": {
+    "s2": {
         "label": "Pro · 30 days",
         "tier": "s2",
         "duration_days": 30,
-        "credit_usd": 10,
         "price_cents": 3900,
-        "blurb": "Faster model, longer context. $10 of usage credit.",
+        "blurb": "Faster model, longer context.",
         "featured": True,
     },
 }
+
+
+# Cache of the partner's ``allowed_credit_options`` so the /buy form
+# doesn't re-fetch on every page load. Reset by the test conftest
+# between tests; in production it lives for the process lifetime, which
+# matches how partners change pricing (rarely, and a restart is fine).
+_credit_options_cache: list[int] | None = None
+
+
+def _get_credit_options() -> list[int]:
+    global _credit_options_cache
+    if _credit_options_cache is None:
+        _credit_options_cache = mintoffice.get_allowed_credit_options()
+    return _credit_options_cache
 
 EVENT_TYPE_BADGE_CLASS = {
     "order.created": "badge-created",
@@ -207,7 +220,10 @@ def buy_form(request: Request, plan: str | None = None) -> HTMLResponse:
     page's per-plan CTA lands the customer on the right option."""
     selected = plan if plan in PLANS else None
     return _render(request, "buy.html", {
-        "plans": PLANS, "selected": selected, "error": None,
+        "plans": PLANS,
+        "selected": selected,
+        "credit_options": _get_credit_options(),
+        "error": None,
     })
 
 
@@ -216,43 +232,49 @@ def buy_submit(
     request: Request,
     plan: str = Form(...),
     language: str = Form("en"),
+    credit_usd: int = Form(0),
+    idempotency_key_form: str = Form(""),
 ) -> Response:
     spec = PLANS.get(plan)
     if not spec:
-        return _render(request, "buy.html", {
-            "plans": PLANS, "selected": None,
-            "error": "Pick a valid plan, please.",
-        }, status_code=400)
+        raise HTTPException(status_code=422, detail=f"unknown plan: {plan}")
+    if credit_usd < 0:
+        credit_usd = 0
     success_url = f"{settings.public_base_url}/thank-you?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{settings.public_base_url}/cancel"
     try:
         order = mintoffice.create_order(
             tier=spec["tier"],
             duration_days=int(spec["duration_days"]),
-            credit_usd=int(spec["credit_usd"]),
+            credit_usd=credit_usd,
             language=language,
             success_url=success_url,
             cancel_url=cancel_url,
             product_name=f"{settings.partner_brand} {spec['label']}",
+            idempotency_key=idempotency_key_form or None,
         )
     except mintoffice.MintOfficeError as e:
         logger.warning("MintOffice rejected order: %s", e)
         return _render(request, "buy.html", {
             "plans": PLANS, "selected": plan,
+            "credit_options": _get_credit_options(),
             "error": mintoffice.format_error(e),
         }, status_code=502)
     except Exception:  # noqa: BLE001
         logger.exception("MintOffice call blew up")
         return _render(request, "buy.html", {
             "plans": PLANS, "selected": plan,
+            "credit_options": _get_credit_options(),
             "error": "Could not reach checkout — please try again in a minute.",
         }, status_code=502)
     if not order.checkout_url:
         return _render(request, "buy.html", {
             "plans": PLANS, "selected": plan,
+            "credit_options": _get_credit_options(),
             "error": "MintOffice didn't return a checkout URL.",
         }, status_code=502)
-    logger.info("Order %d created for plan=%s → %s", order.id, plan, order.checkout_url)
+    logger.info("Order %d created for plan=%s credit=%d → %s",
+                order.id, plan, credit_usd, order.checkout_url)
     return RedirectResponse(order.checkout_url, status_code=status.HTTP_303_SEE_OTHER)
 
 

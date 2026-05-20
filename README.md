@@ -24,7 +24,11 @@ by hand, or as a starting point for your own portal.
 ## What's covered
 
 - `GET  /` — landing page (plan cards, prices, featured plan ribbon)
-- `GET  /buy` — plan picker form (`?plan=<slug>` pre-selects)
+- `GET  /buy` — plan picker form (`?plan=<slug>` pre-selects). Fetches
+  the partner's `allowed_credit_options` from MintOffice and offers the
+  customer a choice between bundling an LLM credit pack (e.g. $10 / $20
+  / $50) or buying **VPS only** and bringing their own Codex / Claude
+  API key after the panel opens.
 - `POST /buy` — calls MintOffice `POST /api/v1/orders`, redirects to Stripe
 - `GET  /thank-you` — post-payment landing
 - `GET  /cancel` — abandoned-checkout landing

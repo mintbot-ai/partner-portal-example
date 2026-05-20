@@ -140,6 +140,7 @@ def create_order(
     cancel_url: str,
     product_name: str | None = None,
     external_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> CreatedOrder:
     """POST /api/v1/orders.
 
@@ -147,6 +148,11 @@ def create_order(
     the customer — leave it None and MintOffice falls back to a generic
     ``S2 · 30d``-style label. Pass something branded like
     ``"AcmeAI Assistant · 30 days"`` for a white-label checkout page.
+
+    Pass ``idempotency_key`` when the caller wants to make a particular
+    submit idempotent across the network boundary (e.g. a hidden form
+    field that survives an accidental refresh). When unset, a fresh uuid4
+    is generated per call.
     """
     body: dict = {
         "tier": tier,
@@ -160,7 +166,7 @@ def create_order(
         body["product_name"] = product_name
     if external_id:
         body["external_id"] = external_id
-    headers = {"Idempotency-Key": str(uuid.uuid4())}
+    headers = {"Idempotency-Key": idempotency_key or str(uuid.uuid4())}
     with _client() as c:
         r = _post_with_retry(c, "/orders", json=body, headers=headers)
     try:
@@ -169,10 +175,50 @@ def create_order(
         payload = None
     if r.status_code >= 400:
         raise MintOfficeError(r.status_code, payload)
+    payload = payload or {}
     return CreatedOrder(
-        id=int(payload["id"]),
-        status=str(payload["status"]),
+        id=int(payload.get("id") or 0),
+        status=str(payload.get("status") or ""),
         checkout_url=str(payload.get("checkout_url") or ""),
         amount_cents=int(payload.get("amount_cents") or 0),
         currency=str(payload.get("currency") or "usd"),
     )
+
+
+def get_allowed_credit_options() -> list[int]:
+    """GET /api/v1/settings → list of credit bundle sizes the partner allows.
+
+    MintOffice stores the partner's chosen subset of ``(5, 10, 20, 50)``
+    USD as ``allowed_credit_options`` on the pricing section. An empty
+    list means the partner only sells the VPS (clients bring their own
+    Codex / Claude API key).
+
+    Strictly best-effort: any failure (missing API key, transport error,
+    non-2xx, malformed body) returns an empty list so the /buy page
+    degrades gracefully to VPS-only instead of 500ing.
+    """
+    try:
+        with _client() as c:
+            r = c.get("/settings")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not reach MintOffice /settings: %s", exc)
+        return []
+    if r.status_code >= 400:
+        logger.warning("MintOffice /settings returned %s", r.status_code)
+        return []
+    try:
+        payload = r.json()
+    except ValueError:
+        return []
+    raw = payload.get("allowed_credit_options") if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        return []
+    out: list[int] = []
+    for item in raw:
+        try:
+            n = int(item)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out.append(n)
+    return out
