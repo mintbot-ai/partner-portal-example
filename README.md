@@ -131,7 +131,7 @@ Each event arrives as a `POST` with a JSON body. The handful you care
 about for a basic flow:
 
 - **`order.created`** — confirmed Stripe Checkout Session was minted.
-  Payload: `{order_id, tier, duration_days, checkout_url, external_id}`.
+  Payload: `{order_id, tier, duration_months, checkout_url, external_id}`.
 - **`order.paid`** — customer paid. Revenue split is finalised. Payload:
   `{order_id, gross_cents, partner_cut_cents, currency, paid_at}`.
 - **`agent.ready`** — agent VPS is up and the panel is reachable. Payload:

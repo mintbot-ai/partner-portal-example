@@ -140,7 +140,7 @@ def _post_with_retry(client: httpx.Client, path: str, *, json: dict, headers: di
 def create_order(
     *,
     tier: str,
-    duration_days: int,
+    duration_months: int,
     credit_usd: int,
     language: str,
     success_url: str,
@@ -153,7 +153,7 @@ def create_order(
 
     ``product_name`` becomes the Stripe Checkout line-item title shown to
     the customer — leave it None and MintOffice falls back to a generic
-    ``S2 · 30d``-style label. Pass something branded like
+    ``S2 · 1 month``-style label. Pass something branded like
     ``"AcmeAI Assistant · 1 month"`` for a white-label checkout page.
 
     Pass ``idempotency_key`` when the caller wants to make a particular
@@ -163,7 +163,7 @@ def create_order(
     """
     body: dict = {
         "tier": tier,
-        "duration_days": duration_days,
+        "duration_months": duration_months,
         "credit_usd": credit_usd,
         "language": language,
         "success_url": success_url,

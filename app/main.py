@@ -132,21 +132,19 @@ app.add_middleware(SecurityHeadersMiddleware)
 # Sample plans. Keys are the MintOffice tier slug so ``?plan=s1`` deep
 # links route correctly. Edit freely; the only constraint is that
 # ``tier`` is one of MintOffice's allowed tiers (trial, s1, s2, s4) and
-# ``duration_days`` is one of 1, 7, 30, 90, 365. Credit is no longer
-# baked into the plan — the customer picks an LLM credit bundle on the
-# /buy form (or "no credit / VPS only" to bring their own API key).
+# ``duration_months`` is one of 1, 3, 12. Credit is no longer baked into
+# the plan — the customer picks an LLM credit bundle on the /buy form
+# (or "no credit / VPS only" to bring their own API key).
 #
-# Monthly tier note: ``duration_days=30`` is the internal DB-clock budget
-# (used by mintbot to set the agent's local expiry date). On the upstream
-# VPS provider (SporeStack) the actual server runs on a "monthly" billing
-# cycle — one billing period per top-up, not literally 30 calendar days.
-# Mintbot's deploy worker translates this for us; partners can keep
-# advertising "1 month" in customer-facing labels.
+# Trial note: ``duration_months=1`` is required by the MintOffice API
+# shape, but MintOffice special-cases trial to a fixed 24h server
+# lifetime regardless of the months value — the partner pays the trial
+# base once.
 PLANS = {
     "trial": {
         "label": "Trial · 24h",
         "tier": "trial",
-        "duration_days": 1,
+        "duration_months": 1,
         "price_cents": 0,
         "blurb": "One day to kick the tires.",
         "featured": False,
@@ -154,7 +152,7 @@ PLANS = {
     "s1": {
         "label": "Basic · 1 month",
         "tier": "s1",
-        "duration_days": 30,
+        "duration_months": 1,
         "price_cents": 1500,
         "blurb": "A month of assistant time.",
         "featured": False,
@@ -162,7 +160,7 @@ PLANS = {
     "s2": {
         "label": "Pro · 1 month",
         "tier": "s2",
-        "duration_days": 30,
+        "duration_months": 1,
         "price_cents": 3900,
         "blurb": "Faster model, longer context.",
         "featured": True,
@@ -329,7 +327,7 @@ def buy_submit(
     try:
         order = mintoffice.create_order(
             tier=spec["tier"],
-            duration_days=int(spec["duration_days"]),
+            duration_months=int(spec["duration_months"]),
             credit_usd=credit_usd,
             language=language,
             success_url=success_url,

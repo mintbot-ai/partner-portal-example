@@ -99,7 +99,7 @@ def main() -> int:
         body = json.dumps({
             "order_id": 1,
             "tier": "s2",
-            "duration_days": 30,
+            "duration_months": 1,
             "gross_cents": 1500,
             "partner_cut_cents": 500,
             "currency": "usd",

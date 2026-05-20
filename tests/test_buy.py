@@ -68,6 +68,40 @@ def test_buy_post_with_credit_usd(client, httpx_mock):
     assert resp.status_code == 303
 
 
+def test_buy_post_sends_duration_months_to_mintoffice(client, httpx_mock):
+    """Regression — the Brand Partner API takes ``duration_months`` (1/3/12),
+    not ``duration_days`` (extra="forbid" on MintOffice's pydantic schema, so
+    any drift here surfaces as a 422 in production). The other tests stub the
+    /orders response without validating the request body, so this is the only
+    place that catches the rename. Don't loosen the assertion."""
+    import json as _json
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [10]},
+        status_code=200,
+    )
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/orders",
+        json={"checkout_url": "https://stripe.test/pay"},
+        status_code=200,
+    )
+    resp = client.post(
+        "/buy",
+        data={"plan": "s1", "credit_usd": "10"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303, resp.text
+    order_calls = [
+        r for r in httpx_mock.get_requests()
+        if r.url.path.endswith("/orders") and r.method == "POST"
+    ]
+    assert len(order_calls) == 1
+    body = _json.loads(order_calls[0].content.decode())
+    assert "duration_months" in body, body
+    assert body["duration_months"] == 1
+    assert "duration_days" not in body, body
+
+
 def test_buy_post_unknown_plan(client):
     resp = client.post("/buy", data={"plan": "unknown", "credit_usd": "0"})
     assert resp.status_code == 422
