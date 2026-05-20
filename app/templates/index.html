@@ -1,17 +1,44 @@
 {% extends "base.html" %}
 {% block content %}
-  <h2>Your own AI assistant, ready in minutes.</h2>
-  <p class="muted">
-    Pick a plan and we'll spin up a private {{ brand }} assistant — your
-    own server, your own panel, your own model credit.
-  </p>
+  <section class="hero">
+    <span class="eyebrow">{{ brand }} for you</span>
+    <h1>Your own AI assistant,<br>ready in minutes.</h1>
+    <p class="lede">
+      Pick a plan and we'll spin up a private {{ brand }} assistant —
+      your own server, your own panel, your own model credit.
+    </p>
+    <div class="feature-row">
+      <span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        Dedicated VPS
+      </span>
+      <span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        Pay-as-you-go credit
+      </span>
+      <span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        Cancel any time
+      </span>
+    </div>
+  </section>
 
+  <p class="section-title">Choose a plan</p>
   <div class="grid">
     {% for slug, plan in plans.items() %}
-      <div class="card">
+      <div class="plan-card{% if plan.featured %} featured{% endif %}">
+        {% if plan.featured %}<span class="ribbon">Recommended</span>{% endif %}
         <h3>{{ plan.label }}</h3>
-        <p>{{ plan.blurb }}</p>
-        <a href="/buy?plan={{ slug }}" class="btn">Choose {{ plan.label }}</a>
+        <div class="plan-price">
+          {% if plan.price_cents == 0 %}
+            <span class="amount">Free</span>
+          {% else %}
+            <span class="amount">${{ "%.0f"|format(plan.price_cents / 100) }}</span>
+            <span class="period">/ {{ plan.duration_days }} {% if plan.duration_days == 1 %}day{% else %}days{% endif %}</span>
+          {% endif %}
+        </div>
+        <p class="plan-blurb">{{ plan.blurb }}</p>
+        <a href="/buy?plan={{ slug }}" class="btn">Choose {{ plan.label.split(' ·')[0] }} →</a>
       </div>
     {% endfor %}
   </div>

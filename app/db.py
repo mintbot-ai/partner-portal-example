@@ -1,4 +1,4 @@
-"""SQLite helpers — single events table, plus a tiny idempotency check.
+"""SQLite helpers — single events table, plus idempotency + pagination.
 
 Schema:
 
@@ -49,6 +49,19 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS events_received_at_idx "
             "ON events(received_at DESC)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS events_type_idx ON events(event_type)"
+        )
+
+
+def healthcheck() -> bool:
+    """Cheap read+write smoke test for /healthz. Returns True on success."""
+    try:
+        with _connect() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return True
+    except sqlite3.Error:
+        return False
 
 
 def store_event(event_id: str, event_type: str, payload: str) -> bool:
@@ -67,11 +80,43 @@ def store_event(event_id: str, event_type: str, payload: str) -> bool:
     return True
 
 
-def list_events(limit: int = 100) -> list[dict]:
+def list_events(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    event_type: str | None = None,
+) -> list[dict]:
+    where = ""
+    params: list = []
+    if event_type:
+        where = "WHERE event_type = ? "
+        params.append(event_type)
+    params.extend([int(limit), int(offset)])
     with _connect() as conn:
         rows = conn.execute(
             "SELECT id, event_id, event_type, payload, received_at "
-            "FROM events ORDER BY id DESC LIMIT ?",
-            (int(limit),),
+            f"FROM events {where}ORDER BY id DESC LIMIT ? OFFSET ?",
+            tuple(params),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def count_events(*, event_type: str | None = None) -> int:
+    with _connect() as conn:
+        if event_type:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM events WHERE event_type = ?",
+                (event_type,),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()
+        return int(row["n"]) if row else 0
+
+
+def known_event_types() -> list[str]:
+    """Distinct event_type values seen so far — drives the /admin filter."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT event_type FROM events ORDER BY event_type"
+        ).fetchall()
+        return [r["event_type"] for r in rows]

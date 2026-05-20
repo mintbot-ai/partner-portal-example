@@ -1,13 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-  <h2>Thank you!</h2>
-  <p>
-    Your payment is being processed. You'll receive an email from us within
-    a few minutes with the link to your {{ brand }} assistant panel.
-  </p>
-  <p class="muted">
-    Already paid and waiting? You can close this tab — the email will
-    arrive shortly.
-  </p>
-  <p><a href="/" class="btn">Back to the homepage</a></p>
+  <div class="card" style="text-align:center;padding:3rem 2rem">
+    <div style="width:4rem;height:4rem;margin:0 auto 1.25rem;border-radius:50%;background:linear-gradient(135deg, var(--accent), var(--accent-2));display:flex;align-items:center;justify-content:center;box-shadow:0 0 32px rgba(124, 92, 255, 0.4)">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <h2 style="margin-bottom:0.75rem">Thank you!</h2>
+    <p>
+      Your payment is being processed. You'll receive an email within a few
+      minutes with the link to your {{ brand }} assistant panel.
+    </p>
+    <p class="muted" style="font-size:0.875rem">
+      Already paid and waiting? Close this tab — the email will arrive shortly.
+    </p>
+    <p style="margin-top:1.5rem"><a href="/" class="btn btn-ghost">← Back to the homepage</a></p>
+  </div>
 {% endblock %}

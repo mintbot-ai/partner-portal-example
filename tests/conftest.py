@@ -31,6 +31,7 @@ def app_with_tmp_db(tmp_path, monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://acmeai.example.test")
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD", "test-pw")
+    monkeypatch.setenv("ADMIN_PAGE_SIZE", "5")
 
     # Force a fresh import of the app package so settings are re-read.
     for mod in list(sys.modules):

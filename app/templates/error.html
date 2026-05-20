@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ status_code }} — {{ brand }}{% endblock %}
+{% block content %}
+  <div class="card" style="text-align:center;padding:3rem 2rem;max-width:32rem;margin:2rem auto">
+    <p style="font-family:var(--font-mono);color:var(--muted);font-size:0.875rem;letter-spacing:0.1em;margin:0 0 0.5rem">HTTP {{ status_code }}</p>
+    <h2 style="margin-bottom:0.75rem">{{ title }}</h2>
+    <p class="dim">{{ message }}</p>
+    <p style="margin-top:1.5rem"><a href="/" class="btn">← Back to the homepage</a></p>
+  </div>
+{% endblock %}

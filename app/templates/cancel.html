@@ -1,9 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-  <h2>Checkout cancelled</h2>
-  <p>No charge was made.</p>
-  <p>
-    Changed your mind? You can pick a different plan or try again any time.
-  </p>
-  <p><a href="/buy" class="btn">Back to plans</a></p>
+  <div class="card" style="text-align:center;padding:3rem 2rem">
+    <h2 style="margin-bottom:0.75rem">Checkout cancelled</h2>
+    <p>No charge was made.</p>
+    <p class="muted">Changed your mind? Pick a different plan or try again any time.</p>
+    <p style="margin-top:1.5rem">
+      <a href="/buy" class="btn">Back to plans</a>
+    </p>
+  </div>
 {% endblock %}

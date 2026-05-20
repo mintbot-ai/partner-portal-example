@@ -1,16 +1,30 @@
 {% extends "base.html" %}
 {% block content %}
   <h2>Pick a plan</h2>
+  <p class="dim">Two clicks and a card — you'll be back on a working panel before the kettle boils.</p>
+
   {% if error %}
-    <div class="error">{{ error }}</div>
+    <div class="alert alert-error">{{ error }}</div>
   {% endif %}
-  <form method="post" action="/buy" class="card">
-    <label for="plan">Plan</label>
-    <select id="plan" name="plan" required>
-      {% for slug, plan in plans.items() %}
-        <option value="{{ slug }}"{% if selected == slug %} selected{% endif %}>{{ plan.label }} — {{ plan.blurb }}</option>
-      {% endfor %}
-    </select>
+
+  <form method="post" action="/buy" class="card" style="margin-top:1.5rem">
+    <fieldset style="border:none;padding:0;margin:0">
+      <legend style="padding:0;margin-bottom:0.75rem;color:var(--fg-dim);font-size:0.9375rem;font-weight:500">Plan</legend>
+      <div class="plan-choices" style="display:grid;gap:0.625rem">
+        {% for slug, plan in plans.items() %}
+          <label class="plan-choice" style="display:flex;align-items:flex-start;gap:0.75rem;padding:0.875rem 1rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-soft);cursor:pointer;margin:0;transition:border-color 120ms ease, background 120ms ease">
+            <input type="radio" name="plan" value="{{ slug }}" required style="margin-top:0.25rem;accent-color:var(--accent)"{% if selected == slug %} checked{% endif %}>
+            <span style="flex:1">
+              <strong style="color:var(--fg);font-weight:600">{{ plan.label }}</strong>
+              <span class="dim" style="display:block;font-size:0.875rem;margin-top:0.125rem">{{ plan.blurb }}</span>
+            </span>
+            <span class="badge">
+              {% if plan.price_cents == 0 %}Free{% else %}${{ "%.0f"|format(plan.price_cents / 100) }}{% endif %}
+            </span>
+          </label>
+        {% endfor %}
+      </div>
+    </fieldset>
 
     <label for="language">Panel language</label>
     <select id="language" name="language">
@@ -20,12 +34,17 @@
       <option value="ru">Русский</option>
     </select>
 
-    <p style="margin-top:1.5rem">
+    <div style="margin-top:1.75rem;display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center">
       <button type="submit" class="btn">Continue to checkout →</button>
-    </p>
-    <p class="muted" style="margin-top:0.5rem">
-      You'll be redirected to a secure payment page and returned here once
-      payment completes.
+      <a href="/" class="btn btn-ghost">Cancel</a>
+    </div>
+    <p class="muted" style="margin-top:1rem;font-size:0.8125rem">
+      You'll be redirected to a secure payment page and returned here once payment completes.
     </p>
   </form>
+
+  <style>
+    .plan-choice:hover { border-color: var(--accent) !important; background: var(--bg-elev) !important; }
+    .plan-choice:has(input:checked) { border-color: var(--accent) !important; background: rgba(124, 92, 255, 0.06) !important; }
+  </style>
 {% endblock %}

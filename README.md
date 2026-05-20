@@ -23,14 +23,29 @@ by hand, or as a starting point for your own portal.
 
 ## What's covered
 
-- `GET  /` — landing page (plan cards)
+- `GET  /` — landing page (plan cards, prices, featured plan ribbon)
 - `GET  /buy` — plan picker form (`?plan=<slug>` pre-selects)
 - `POST /buy` — calls MintOffice `POST /api/v1/orders`, redirects to Stripe
 - `GET  /thank-you` — post-payment landing
 - `GET  /cancel` — abandoned-checkout landing
 - `POST /webhooks/mintoffice` — signature-verified inbound event ingest
-- `GET  /admin` — Basic Auth event browser
-- `GET  /healthz` — liveness probe
+- `GET  /admin` — Basic Auth event browser (paginated, filter by event type)
+- `GET  /healthz` — liveness probe (includes a SQLite read+write check)
+
+Sane defaults out of the box:
+
+- **Modern dark UI** — Inter + JetBrains Mono, gradient hero, card-based
+  plan picker, color-coded event-type badges on `/admin`. Fork the CSS in
+  `app/templates/base.html` for a colour rebrand without touching markup.
+- **Defence-in-depth security headers** — CSP, `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`,
+  and `Strict-Transport-Security` (when served over HTTPS).
+- **Retries on transient MintOffice failures** — idempotent POSTs to
+  `/orders` retry on 502/503/504 + transport errors with capped backoff.
+  Configurable via `MINTOFFICE_RETRIES` and `MINTOFFICE_TIMEOUT_SECONDS`.
+- **Branded HTML 404 / 500 pages** — same look as the rest of the portal;
+  JSON returned for `Accept: application/json` clients.
+- **Test-mode banner** when pointed at the dev MintOffice.
 
 ## What's NOT covered (intentionally)
 
@@ -177,11 +192,15 @@ The default templates pretend to be **AcmeAI**. Change:
 - `PARTNER_BRAND` in `.env` — drives the Stripe line-item name, page
   titles, and the header/footer text. Set it once and most of the visible
   copy follows.
-- `app/templates/base.html` — the `<style>` block at the top has the
-  CSS variables (background, accent colour, card colour). Edit those for
-  a colour rebrand without touching markup.
-- The rest of `app/templates/*.html` — copy lives here. Estonian / Spanish
-  / etc. translations: fork these files.
+- `app/templates/base.html` — the `<style>` block at the top has CSS
+  variables (`--accent`, `--accent-2`, `--bg`, `--bg-elev`, `--radius`).
+  Tweak those for a colour rebrand without touching markup. The two
+  accent colours flow into the brand-mark dot, button gradients, focus
+  rings, and the featured-plan ribbon.
+- `app/main.py` — `PLANS` dict has the plan slugs, prices (in cents),
+  blurbs, and a `featured` flag that adds the "Recommended" ribbon.
+- The rest of `app/templates/*.html` — copy lives here. Estonian /
+  Spanish / etc. translations: fork these files.
 
 ## Troubleshooting
 

@@ -3,15 +3,27 @@
 Only the endpoints this portal actually exercises are wrapped — keep it
 intentionally narrow. Add more as you need them. Full API reference:
 the public mintbot docs at https://mintbot.how/partner-api/.
+
+Retries: idempotent POSTs to ``/orders`` (an ``Idempotency-Key`` makes
+them safe) retry on 5xx and transport errors. The MintOffice API is
+intentionally idempotent on that key, so MintOffice will collapse
+duplicate POSTs server-side.
 """
 from __future__ import annotations
 
+import logging
+import time
 import uuid
 from dataclasses import dataclass
 
 import httpx
 
 from .config import settings
+
+logger = logging.getLogger("partner_portal.mintoffice")
+
+USER_AGENT = "partner-portal-example/0.3"
+RETRYABLE_STATUS = frozenset({502, 503, 504})
 
 
 class MintOfficeError(RuntimeError):
@@ -75,12 +87,47 @@ def _client() -> httpx.Client:
         )
     return httpx.Client(
         base_url=f"{settings.mintoffice_api_url}/api/v1",
-        timeout=15.0,
+        timeout=settings.mintoffice_timeout_seconds,
         headers={
             "Authorization": f"Bearer {settings.mintoffice_api_key}",
-            "User-Agent": "partner-portal-example/0.1",
+            "User-Agent": USER_AGENT,
         },
     )
+
+
+def _post_with_retry(client: httpx.Client, path: str, *, json: dict, headers: dict) -> httpx.Response:
+    """POST with capped exponential backoff on 5xx / network errors.
+
+    The Idempotency-Key in ``headers`` makes retries safe — MintOffice
+    collapses duplicate POSTs server-side.
+    """
+    attempts = settings.mintoffice_retries + 1
+    backoff = 0.5
+    last_exc: Exception | None = None
+    for n in range(1, attempts + 1):
+        try:
+            r = client.post(path, json=json, headers=headers)
+            if r.status_code in RETRYABLE_STATUS and n < attempts:
+                logger.warning(
+                    "MintOffice %s returned %s (attempt %d/%d) — retrying in %.1fs",
+                    path, r.status_code, n, attempts, backoff,
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 4.0)
+                continue
+            return r
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            last_exc = exc
+            if n >= attempts:
+                break
+            logger.warning(
+                "MintOffice %s transport error %s (attempt %d/%d) — retrying in %.1fs",
+                path, type(exc).__name__, n, attempts, backoff,
+            )
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 4.0)
+    assert last_exc is not None  # only path that exits the loop without return
+    raise last_exc
 
 
 def create_order(
@@ -115,7 +162,7 @@ def create_order(
         body["external_id"] = external_id
     headers = {"Idempotency-Key": str(uuid.uuid4())}
     with _client() as c:
-        r = c.post("/orders", json=body, headers=headers)
+        r = _post_with_retry(c, "/orders", json=body, headers=headers)
     try:
         payload = r.json()
     except ValueError:

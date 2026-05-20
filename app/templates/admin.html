@@ -1,38 +1,72 @@
 {% extends "base.html" %}
 {% block title %}Admin — {{ brand }}{% endblock %}
 {% block content %}
-  <h2>Received webhook events</h2>
-  <p class="muted">
-    Showing the {{ events|length }} most recent inbound events. Bottom up
-    is oldest. The signature was verified before storage.
-  </p>
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:1rem;flex-wrap:wrap">
+    <div>
+      <h2>Inbound webhook events</h2>
+      <p class="dim" style="margin:0">
+        Showing {{ events|length }} of {{ total_events }} stored events.
+        {% if event_type_filter %}Filtered to <code>{{ event_type_filter }}</code>.{% endif %}
+        Signatures verified before storage.
+      </p>
+    </div>
+    <form method="get" action="/admin" class="toolbar" style="margin:0">
+      <select name="type" onchange="this.form.submit()">
+        <option value="">All event types</option>
+        {% for t in known_types %}
+          <option value="{{ t }}"{% if t == event_type_filter %} selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      {% if event_type_filter %}
+        <a href="/admin" class="btn btn-ghost" style="padding:0.5rem 0.75rem;font-size:0.875rem">Clear</a>
+      {% endif %}
+    </form>
+  </div>
+
   {% if not events %}
-    <div class="card">
-      <p>No events yet. Try placing a test order from <a href="/buy">/buy</a>.</p>
+    <div class="card empty-state" style="margin-top:1.5rem">
+      <p style="font-size:1rem;color:var(--fg-dim)">No events {% if event_type_filter %}match this filter{% else %}yet{% endif %}.</p>
+      <p>{% if event_type_filter %}<a href="/admin">Clear the filter</a>{% else %}Try placing a test order from <a href="/buy">/buy</a>, or POST a synthetic event with <code>scripts/send_test_webhook.py</code>.{% endif %}</p>
     </div>
   {% else %}
-    <table>
+    <table style="margin-top:1.5rem">
       <thead>
         <tr>
-          <th>#</th>
-          <th>Type</th>
+          <th style="width:3rem">#</th>
+          <th style="width:9rem">Type</th>
           <th>Event ID</th>
-          <th>Received</th>
+          <th style="width:11rem">Received (UTC)</th>
         </tr>
       </thead>
       <tbody>
         {% for ev in events %}
           <tr>
             <td>{{ ev.id }}</td>
-            <td><code>{{ ev.event_type }}</code></td>
-            <td><code>{{ ev.event_id }}</code></td>
-            <td>{{ ev.received_at }}</td>
+            <td><span class="badge {{ ev.badge_class }}">{{ ev.event_type }}</span></td>
+            <td><code style="color:var(--fg-dim)">{{ ev.event_id }}</code></td>
+            <td class="muted" style="font-family:var(--font-mono);font-size:0.8125rem">{{ ev.received_at }}</td>
           </tr>
           <tr>
-            <td colspan="4"><pre>{{ ev.pretty }}</pre></td>
+            <td colspan="4" style="padding-top:0;padding-bottom:1rem">
+              <details>
+                <summary>view payload ({{ ev.payload_size }} bytes)</summary>
+                <pre style="margin-top:0.5rem">{{ ev.pretty }}</pre>
+              </details>
+            </td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
+
+    {% if has_more %}
+      <p style="text-align:center;margin-top:1.5rem">
+        <a href="/admin?{% if event_type_filter %}type={{ event_type_filter }}&{% endif %}offset={{ offset + limit }}" class="btn btn-ghost">Older events →</a>
+      </p>
+    {% endif %}
+    {% if offset > 0 %}
+      <p style="text-align:center;margin-top:0.75rem">
+        <a href="/admin{% if event_type_filter %}?type={{ event_type_filter }}{% endif %}" class="dim" style="font-size:0.875rem">← back to newest</a>
+      </p>
+    {% endif %}
   {% endif %}
 {% endblock %}
