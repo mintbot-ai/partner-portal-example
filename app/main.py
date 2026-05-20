@@ -154,9 +154,9 @@ PLANS = {
         "label": "Pro · 30 days",
         "tier": "s2",
         "duration_days": 30,
-        "credit_usd": 15,
+        "credit_usd": 10,
         "price_cents": 3900,
-        "blurb": "Faster model, longer context. $15 of usage credit.",
+        "blurb": "Faster model, longer context. $10 of usage credit.",
         "featured": True,
     },
 }
