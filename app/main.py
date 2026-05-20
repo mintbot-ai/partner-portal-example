@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -162,17 +163,60 @@ PLANS = {
 
 
 # Cache of the partner's ``allowed_credit_options`` so the /buy form
-# doesn't re-fetch on every page load. Reset by the test conftest
-# between tests; in production it lives for the process lifetime, which
-# matches how partners change pricing (rarely, and a restart is fine).
-_credit_options_cache: list[int] | None = None
+# doesn't re-fetch on every page load. Two failure modes the cache has
+# to handle:
+#
+# 1. MintOffice transient blip — we must NOT poison the cache with an
+#    empty list (which would silently pin the portal in VPS-only mode
+#    until the next process restart). ``get_allowed_credit_options``
+#    returns ``None`` to signal "fetch failed"; we keep the last good
+#    value and retry sooner.
+# 2. Partner edits pricing — we want the change visible within minutes,
+#    not after a deploy. Hence the TTL.
+#
+# Reset by the test conftest between tests; in production it lives for
+# the process lifetime.
+_CREDIT_OPTIONS_TTL_SECONDS = 300       # 5 min when the last fetch succeeded
+_CREDIT_OPTIONS_RETRY_SECONDS = 30      # back off briefly after a failure
+_credit_options_cache: dict[str, object] = {
+    "value": None,        # last known good list[int] (None means never seen)
+    "expires_at": 0.0,    # epoch seconds; 0 forces a fetch on next read
+}
 
 
 def _get_credit_options() -> list[int]:
-    global _credit_options_cache
-    if _credit_options_cache is None:
-        _credit_options_cache = mintoffice.get_allowed_credit_options()
-    return _credit_options_cache
+    """Return the partner's allowed credit bundles for the /buy form.
+
+    On a cache miss, fetch from MintOffice. On a fetch failure, keep the
+    last good value (sticky) instead of falling back to an empty list —
+    a one-off 502 must not pin the portal to VPS-only.
+    """
+    now = time.time()
+    cached = _credit_options_cache["value"]
+    expires_at = float(_credit_options_cache["expires_at"])  # type: ignore[arg-type]
+    if cached is not None and expires_at > now:
+        return list(cached)  # type: ignore[arg-type]
+    fetched = mintoffice.get_allowed_credit_options()
+    if fetched is not None:
+        _credit_options_cache["value"] = fetched
+        _credit_options_cache["expires_at"] = now + _CREDIT_OPTIONS_TTL_SECONDS
+        return list(fetched)
+    # Fetch failed. Keep the previous good value if we ever had one; the
+    # short retry window means we re-attempt on the next page load
+    # instead of every single request.
+    _credit_options_cache["expires_at"] = now + _CREDIT_OPTIONS_RETRY_SECONDS
+    if cached is not None:
+        return list(cached)  # type: ignore[arg-type]
+    return []
+
+
+def _credit_usd_is_allowed(amount: int, options: list[int]) -> bool:
+    """0 is always allowed (VPS-only — buy.html offers it as a separate
+    radio regardless of what the partner configured). Any positive amount
+    must appear in the partner's configured list."""
+    if amount == 0:
+        return True
+    return amount in options
 
 EVENT_TYPE_BADGE_CLASS = {
     "order.created": "badge-created",
@@ -240,6 +284,20 @@ def buy_submit(
         raise HTTPException(status_code=422, detail=f"unknown plan: {plan}")
     if credit_usd < 0:
         credit_usd = 0
+    options = _get_credit_options()
+    if not _credit_usd_is_allowed(credit_usd, options):
+        # The customer hand-crafted a credit_usd value outside the
+        # partner's allowed bundles. Re-render the form with an error so
+        # the legitimate UI keeps working but a curl bypass gets a 400.
+        logger.warning(
+            "Rejected /buy with disallowed credit_usd=%s (allowed=%s)",
+            credit_usd, options,
+        )
+        return _render(request, "buy.html", {
+            "plans": PLANS, "selected": plan,
+            "credit_options": options,
+            "error": "That credit bundle isn't available — please pick one of the listed options.",
+        }, status_code=400)
     success_url = f"{settings.public_base_url}/thank-you?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{settings.public_base_url}/cancel"
     try:

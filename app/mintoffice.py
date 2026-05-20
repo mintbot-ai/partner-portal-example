@@ -185,7 +185,7 @@ def create_order(
     )
 
 
-def get_allowed_credit_options() -> list[int]:
+def get_allowed_credit_options() -> list[int] | None:
     """GET /api/v1/settings → list of credit bundle sizes the partner allows.
 
     MintOffice stores the partner's chosen subset of ``(5, 10, 20, 50)``
@@ -193,25 +193,38 @@ def get_allowed_credit_options() -> list[int]:
     list means the partner only sells the VPS (clients bring their own
     Codex / Claude API key).
 
-    Strictly best-effort: any failure (missing API key, transport error,
-    non-2xx, malformed body) returns an empty list so the /buy page
-    degrades gracefully to VPS-only instead of 500ing.
+    Return value distinguishes three states so callers can react sanely:
+
+    - ``list[int]`` (possibly empty): authoritative answer from MintOffice.
+      An empty list is a deliberate "VPS-only" configuration.
+    - ``None``: the call failed (missing API key, transport error, non-2xx,
+      malformed body). Caller should fall back to its last known good
+      value rather than treat this as "VPS-only" — otherwise a single
+      blip would pin the portal in VPS-only mode permanently.
+
+    The ``n > 0`` filter drops 0 from the returned list on purpose:
+    MintOffice's settings UI doesn't expose 0 as a paid bundle, and the
+    /buy template already renders a dedicated "No credit — VPS only"
+    radio so a "$0" entry in the list would just be a duplicate of that.
     """
     try:
         with _client() as c:
             r = c.get("/settings")
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not reach MintOffice /settings: %s", exc)
-        return []
+        return None
     if r.status_code >= 400:
         logger.warning("MintOffice /settings returned %s", r.status_code)
-        return []
+        return None
     try:
         payload = r.json()
     except ValueError:
-        return []
+        logger.warning("MintOffice /settings returned non-JSON body")
+        return None
     raw = payload.get("allowed_credit_options") if isinstance(payload, dict) else None
     if not isinstance(raw, list):
+        # Field missing entirely — that's a real answer from the API
+        # ("partner hasn't configured it"), so treat as empty, not failure.
         return []
     out: list[int] = []
     for item in raw:

@@ -63,10 +63,10 @@ def _reset_buy_cache():
     the partner-settings request doesn't fire on every page load. Tests
     use different mocked responses, so the cache must reset.
     """
-    main_mod = sys.modules.get("app.main")
-    if main_mod is not None and hasattr(main_mod, "_credit_options_cache"):
-        main_mod._credit_options_cache = None
+    def _wipe():
+        main_mod = sys.modules.get("app.main")
+        if main_mod is not None and hasattr(main_mod, "_credit_options_cache"):
+            main_mod._credit_options_cache = {"value": None, "expires_at": 0.0}
+    _wipe()
     yield
-    main_mod = sys.modules.get("app.main")
-    if main_mod is not None and hasattr(main_mod, "_credit_options_cache"):
-        main_mod._credit_options_cache = None
+    _wipe()
