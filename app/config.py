@@ -46,7 +46,7 @@ def _float(value: str, default: float, *, lo: float = 0.0) -> float:
 
 def _load() -> Settings:
     return Settings(
-        partner_brand=os.environ.get("PARTNER_BRAND", "AcmeAI").strip() or "AcmeAI",
+        partner_brand=os.environ.get("PARTNER_BRAND", "ExampleAI").strip() or "ExampleAI",
         mintoffice_api_url=os.environ.get(
             "MINTOFFICE_API_URL", "https://mint.mintbot.dev"
         ).rstrip("/"),

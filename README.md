@@ -3,10 +3,10 @@
 A minimal, runnable example of a [**Mintbot Brand Partner**](https://mintbot.how/partner-api/)
 storefront. Fork it, rebrand it, deploy it.
 
-This portal pretends to be **AcmeAI**, a fictitious reseller of AI
-assistants. End users visit `acmeai.example.com`, pick a plan, are sent
+This portal pretends to be **ExampleAI**, a fictitious reseller of AI
+assistants. End users visit `exampleai.example.com`, pick a plan, are sent
 to a Stripe checkout session billed by **Digital Cash OÜ** (the legal
-payee on the mintbot side), and are returned to AcmeAI's thank-you page
+payee on the mintbot side), and are returned to ExampleAI's thank-you page
 after payment. They never see the string `mintbot` anywhere.
 
 The portal also exposes a webhook receiver that:
@@ -151,7 +151,7 @@ partner-portal-example/
 │   ├── mintoffice.py    MintOffice API client (httpx)
 │   ├── webhooks.py      signature verify
 │   ├── db.py            SQLite helpers
-│   └── templates/       Jinja2 templates (AcmeAI branding)
+│   └── templates/       Jinja2 templates (ExampleAI branding)
 ├── scripts/
 │   └── send_test_webhook.py   craft a signed event from the CLI
 ├── tests/               pytest — webhook + buy flow with mocked httpx
@@ -191,7 +191,7 @@ disappear — production traffic looks clean.
 
 ## Branding
 
-The default templates pretend to be **AcmeAI**. Change:
+The default templates pretend to be **ExampleAI**. Change:
 
 - `PARTNER_BRAND` in `.env` — drives the Stripe line-item name, page
   titles, and the header/footer text. Set it once and most of the visible
@@ -220,7 +220,7 @@ That repo defines three files mintbot pulls at agent deploy time:
 | File | Purpose |
 |------|---------|
 | `theme/theme.css` + `theme/theme.json` (+ optional `theme.js`) | Panel look & feel — colours, type, radius, layout tweaks. |
-| `persona/system_prompt.md.j2` | **Full persona override** — Jinja2 template that REPLACES mintbot's bundled assistant persona. The starter file is a fully-worked AcmeAI persona you can adapt; on a real white-label deploy the agent never says "mintbot" in chat, only your brand name. |
+| `persona/system_prompt.md.j2` | **Full persona override** — Jinja2 template that REPLACES mintbot's bundled assistant persona. The starter file is a fully-worked ExampleAI persona you can adapt; on a real white-label deploy the agent never says "mintbot" in chat, only your brand name. |
 | `persona/brand_layer.md`      | Short voice & tone overlay — *appended* on top of whichever persona is active. Use this if `system_prompt.md.j2` is too heavy and you just want a few voice notes. |
 
 End-to-end picture:

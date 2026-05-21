@@ -65,7 +65,7 @@ def test_404_renders_branded_html_for_browsers(app_with_tmp_db):
     r = client.get("/no-such-page", headers={"Accept": "text/html"})
     assert r.status_code == 404
     assert "<html" in r.text.lower()
-    assert "AcmeAI" in r.text
+    assert "ExampleAI" in r.text
     assert "404" in r.text
 
 

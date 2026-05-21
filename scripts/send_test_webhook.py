@@ -24,7 +24,7 @@ Examples
 
     # Different portal, different event type, custom payload.
     python scripts/send_test_webhook.py \\
-        --url https://acmeai.example.com/webhooks/mintoffice \\
+        --url https://exampleai.example.com/webhooks/mintoffice \\
         --type agent.ready \\
         --payload '{"order_id": 42, "agent_id": 7, "panel_url": "https://a7.example/"}'
 """

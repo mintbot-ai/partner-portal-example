@@ -13,11 +13,11 @@ def _fresh_app(monkeypatch, tmp_path, **env):
     """Re-import the app package against the given env so module-scope
     template globals (``test_mode``) reflect the test's settings."""
     monkeypatch.setenv("DB_PATH", str(tmp_path / "portal.db"))
-    monkeypatch.setenv("PARTNER_BRAND", env.get("PARTNER_BRAND", "AcmeAI"))
+    monkeypatch.setenv("PARTNER_BRAND", env.get("PARTNER_BRAND", "ExampleAI"))
     monkeypatch.setenv("MINTOFFICE_API_URL", env["MINTOFFICE_API_URL"])
     monkeypatch.setenv("MINTOFFICE_API_KEY", "mo_live_testkey")
     monkeypatch.setenv("MINTOFFICE_WEBHOOK_SECRET", "whsec_testsecret")
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://acmeai.example.test")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://exampleai.example.test")
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD", "test-pw")
 

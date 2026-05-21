@@ -14,12 +14,12 @@ import pytest
 
 def _set_env(monkeypatch, tmp_path, *, mintoffice_url: str, retries: str = "2") -> None:
     monkeypatch.setenv("DB_PATH", str(tmp_path / "portal.db"))
-    monkeypatch.setenv("PARTNER_BRAND", "AcmeAI")
+    monkeypatch.setenv("PARTNER_BRAND", "ExampleAI")
     monkeypatch.setenv("MINTOFFICE_API_URL", mintoffice_url)
     monkeypatch.setenv("MINTOFFICE_API_KEY", "mo_live_testkey")
     monkeypatch.setenv("MINTOFFICE_WEBHOOK_SECRET", "whsec_testsecret")
     monkeypatch.setenv("MINTOFFICE_RETRIES", retries)
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://acmeai.example.test")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://exampleai.example.test")
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD", "test-pw")
     monkeypatch.setenv("ADMIN_PAGE_SIZE", "5")
