@@ -206,6 +206,59 @@ The default templates pretend to be **AcmeAI**. Change:
 - The rest of `app/templates/*.html` — copy lives here. Estonian /
   Spanish / etc. translations: fork these files.
 
+### Branding the agent itself (panel + persona)
+
+The storefront in **this** repo handles the *purchase* — landing page,
+plan picker, Stripe checkout, webhook receipts, admin console. The
+*agent* the customer gets (the chat panel + the assistant's voice and
+identity) is a separate skin shipped from a different repo:
+
+> **[`mintbot-ai/agent-template`](https://github.com/mintbot-ai/agent-template)** — fork this to skin the agent's panel and rewrite its persona.
+
+That repo defines three files mintbot pulls at agent deploy time:
+
+| File | Purpose |
+|------|---------|
+| `theme/theme.css` + `theme/theme.json` (+ optional `theme.js`) | Panel look & feel — colours, type, radius, layout tweaks. |
+| `persona/system_prompt.md.j2` | **Full persona override** — Jinja2 template that REPLACES mintbot's bundled assistant persona. The starter file is a fully-worked AcmeAI persona you can adapt; on a real white-label deploy the agent never says "mintbot" in chat, only your brand name. |
+| `persona/brand_layer.md`      | Short voice & tone overlay — *appended* on top of whichever persona is active. Use this if `system_prompt.md.j2` is too heavy and you just want a few voice notes. |
+
+End-to-end picture:
+
+```
+┌──────────────────────────┐       ┌──────────────────────────┐
+│ THIS REPO                │       │ mintbot-ai/agent-template│
+│ partner-portal-example   │       │ (skin + persona fork)    │
+│                          │       │                          │
+│ • landing + plan picker  │       │ • theme/theme.css        │
+│ • Stripe checkout        │       │ • theme/theme.json       │
+│ • webhook receiver       │       │ • persona/*.md(.j2)      │
+└──────────────┬───────────┘       └─────────────┬────────────┘
+               │ POST /api/v1/orders             │
+               │                                 │ git clone (deploy)
+               ▼                                 ▼
+        ┌──────────────────────────────────────────────┐
+        │ MintOffice  (mint.mintbot.ai / .dev)         │
+        │ — provisions the agent VPS                   │
+        │ — splices your theme into the panel          │
+        │ — renders your persona into the SOUL.md      │
+        └──────────────────────────────────────────────┘
+                            │
+                            ▼
+                ┌──────────────────────┐
+                │ agentNNN.mintbot.ai  │  ← the customer's running agent
+                │ (panel + chat)       │     wearing your brand
+                └──────────────────────┘
+```
+
+You can ship this storefront WITHOUT a custom `agent-template` fork —
+the customer just gets the default mintbot-styled panel and persona.
+For a true white-label experience where the agent itself wears your
+brand, fork `mintbot-ai/agent-template`, point your partner row at it
+in MintOffice (`Settings → Template` field), and the next deploy picks
+it up. See that repo's `docs/customizing.md` and `docs/publishing.md`
+for the full walkthrough.
+
 ## Troubleshooting
 
 - **MintOffice returned 401** — wrong API key, or your partner row is
