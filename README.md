@@ -30,6 +30,11 @@ by hand, or as a starting point for your own portal.
   / $50) or buying **VPS only** and bringing their own Codex / Claude
   API key after the panel opens.
 - `POST /buy` — calls MintOffice `POST /api/v1/orders`, redirects to Stripe
+- `GET  /extend` — subscription picker (auto-renew sign-up). Accepts
+  optional `?tier=`, `?email=`, `?lang=` query hints so an agent panel
+  can link a logged-in customer straight to a pre-filled form.
+- `POST /extend` — calls MintOffice `POST /api/v1/subscriptions`,
+  redirects to Stripe in `mode=subscription` for monthly auto-renewal.
 - `GET  /thank-you` — post-payment landing
 - `GET  /cancel` — abandoned-checkout landing
 - `POST /webhooks/mintoffice` — signature-verified inbound event ingest

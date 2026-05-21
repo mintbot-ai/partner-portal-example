@@ -87,6 +87,15 @@ class CreatedOrder:
     currency: str
 
 
+@dataclass(frozen=True)
+class CreatedSubscription:
+    id: int
+    status: str
+    checkout_url: str
+    amount_cents: int
+    currency: str
+
+
 def _client() -> httpx.Client:
     if not settings.mintoffice_api_key:
         raise MintOfficeConfigError(
@@ -184,6 +193,62 @@ def create_order(
         raise MintOfficeError(r.status_code, payload)
     payload = payload or {}
     return CreatedOrder(
+        id=int(payload.get("id") or 0),
+        status=str(payload.get("status") or ""),
+        checkout_url=str(payload.get("checkout_url") or ""),
+        amount_cents=int(payload.get("amount_cents") or 0),
+        currency=str(payload.get("currency") or "usd"),
+    )
+
+
+def create_subscription(
+    *,
+    tier: str,
+    currency: str,
+    language: str,
+    success_url: str,
+    cancel_url: str,
+    customer_email: str | None = None,
+    product_name: str | None = None,
+    external_id: str | None = None,
+    idempotency_key: str | None = None,
+) -> CreatedSubscription:
+    """POST /api/v1/subscriptions.
+
+    Mints a recurring monthly Stripe Checkout Session on MintOffice's
+    Digital Cash OÜ Stripe account. The customer sees ``product_name``
+    on the Stripe payment page (default falls back to
+    ``"<TIER> · monthly"`` server-side).
+
+    ``customer_email`` is optional but recommended — Stripe pre-fills
+    the checkout email field, and MintOffice ties the resulting
+    Customer back to the email so any future card change reuses the
+    same Customer instead of creating duplicates.
+    """
+    body: dict = {
+        "tier": tier,
+        "currency": currency.lower(),
+        "language": language,
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+    }
+    if customer_email:
+        body["customer_email"] = customer_email
+    if product_name:
+        body["product_name"] = product_name
+    if external_id:
+        body["external_id"] = external_id
+    headers = {"Idempotency-Key": idempotency_key or str(uuid.uuid4())}
+    with _client() as c:
+        r = _post_with_retry(c, "/subscriptions", json=body, headers=headers)
+    try:
+        payload = r.json()
+    except ValueError:
+        payload = None
+    if r.status_code >= 400:
+        raise MintOfficeError(r.status_code, payload)
+    payload = payload or {}
+    return CreatedSubscription(
         id=int(payload.get("id") or 0),
         status=str(payload.get("status") or ""),
         checkout_url=str(payload.get("checkout_url") or ""),

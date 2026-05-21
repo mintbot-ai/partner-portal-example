@@ -5,6 +5,8 @@ Routes:
   GET  /                       landing page
   GET  /buy                    plan picker form
   POST /buy                    creates a MintOffice order, redirects to Stripe
+  GET  /extend                 subscription picker (auto-renew sign-up)
+  POST /extend                 creates a MintOffice subscription, redirects to Stripe
   GET  /thank-you              post-payment landing
   GET  /cancel                 abandoned-checkout landing
   POST /webhooks/mintoffice    signed inbound webhook ingest
@@ -395,6 +397,142 @@ def buy_submit(
     logger.info("Order %d created for plan=%s credit=%d → %s",
                 order.id, plan, credit_usd, order.checkout_url)
     return RedirectResponse(order.checkout_url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+# Tiers offered as monthly subscriptions on /extend. Same shape as
+# PLANS above but recurring rather than one-shot. Trial is intentionally
+# absent — it's a one-day evaluation, not a recurring plan. Edit freely;
+# the only constraint is that ``tier`` is one of MintOffice's allowed
+# tiers (s1, s2, s4). The price strings are for display only — the
+# authoritative monthly price comes back from MintOffice on
+# checkout creation (so a partner-pricing change in MintOffice is
+# reflected on the real Stripe Checkout page even if you forget to
+# update this table).
+SUBSCRIPTION_PLANS = {
+    "s1": {
+        "label": "Basic · monthly",
+        "tier": "s1",
+        "price_cents": 1500,
+        "blurb": "A month of assistant time, auto-renewed.",
+        "featured": False,
+    },
+    "s2": {
+        "label": "Pro · monthly",
+        "tier": "s2",
+        "price_cents": 3900,
+        "blurb": "Faster model, longer context. Cancel any time.",
+        "featured": True,
+    },
+}
+
+
+@app.get("/extend", response_class=HTMLResponse)
+def extend_form(
+    request: Request,
+    tier: str | None = None,
+    email: str | None = None,
+    lang: str | None = None,
+) -> HTMLResponse:
+    """Subscription picker for end-users coming from an agent panel.
+
+    Query params are hints the panel can pass through:
+
+      tier   — pre-select a card (one of s1/s2/s4)
+      email  — pre-fill the email field (Stripe Customer)
+      lang   — checkout locale (defaults to en)
+
+    The page works without any of them — the user can still pick a
+    plan and enter their email manually.
+    """
+    selected = tier if tier in SUBSCRIPTION_PLANS else None
+    return _render(request, "extend.html", {
+        "plans": SUBSCRIPTION_PLANS,
+        "selected": selected,
+        "prefill_email": email or "",
+        "prefill_lang": (lang or "en").strip().lower() or "en",
+        "error": None,
+    })
+
+
+@app.post("/extend")
+def extend_submit(
+    request: Request,
+    plan: str = Form(...),
+    email: str = Form(""),
+    language: str = Form("en"),
+    idempotency_key_form: str = Form(""),
+) -> Response:
+    spec = SUBSCRIPTION_PLANS.get(plan)
+    if not spec:
+        raise HTTPException(status_code=422, detail=f"unknown plan: {plan}")
+    email_clean = email.strip() or None
+    if email_clean and "@" not in email_clean:
+        return _render(request, "extend.html", {
+            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "prefill_email": email_clean, "prefill_lang": language,
+            "error": "That doesn't look like an email address.",
+        }, status_code=400)
+    success_url = f"{settings.public_base_url}/thank-you?session_id={{CHECKOUT_SESSION_ID}}&kind=subscription"
+    cancel_url = f"{settings.public_base_url}/cancel?kind=subscription"
+    try:
+        sub = mintoffice.create_subscription(
+            tier=spec["tier"],
+            currency="usd",
+            language=language,
+            success_url=success_url,
+            cancel_url=cancel_url,
+            customer_email=email_clean,
+            product_name=f"{settings.partner_brand} {spec['label']}",
+            idempotency_key=idempotency_key_form or None,
+        )
+    except mintoffice.MintOfficeConfigError as e:
+        logger.error("Portal misconfigured — cannot call MintOffice: %s", e)
+        return _render(request, "extend.html", {
+            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "prefill_email": email_clean or "", "prefill_lang": language,
+            "error": "Checkout is temporarily unavailable — please try again shortly.",
+        }, status_code=503)
+    except mintoffice.MintOfficeError as e:
+        if e.status_code in (401, 403):
+            logger.error(
+                "MintOffice rejected our credentials (status=%s, body=%r) — "
+                "rotate MINTOFFICE_API_KEY from the partner dashboard",
+                e.status_code, e.body,
+            )
+            return _render(request, "extend.html", {
+                "plans": SUBSCRIPTION_PLANS, "selected": plan,
+                "prefill_email": email_clean or "", "prefill_lang": language,
+                "error": "Checkout is temporarily unavailable — please try again shortly.",
+            }, status_code=503)
+        logger.warning("MintOffice rejected subscription: %s", e)
+        return _render(request, "extend.html", {
+            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "prefill_email": email_clean or "", "prefill_lang": language,
+            "error": mintoffice.format_error(e),
+        }, status_code=502)
+    except (httpx.TransportError, httpx.TimeoutException) as e:
+        logger.warning("MintOffice transport failure: %s: %s", type(e).__name__, e)
+        return _render(request, "extend.html", {
+            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "prefill_email": email_clean or "", "prefill_lang": language,
+            "error": "Could not reach checkout — please try again in a minute.",
+        }, status_code=502)
+    except Exception:  # noqa: BLE001
+        logger.exception("MintOffice subscription call blew up")
+        return _render(request, "extend.html", {
+            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "prefill_email": email_clean or "", "prefill_lang": language,
+            "error": "Could not reach checkout — please try again in a minute.",
+        }, status_code=502)
+    if not sub.checkout_url:
+        return _render(request, "extend.html", {
+            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "prefill_email": email_clean or "", "prefill_lang": language,
+            "error": "MintOffice didn't return a checkout URL.",
+        }, status_code=502)
+    logger.info("Subscription %d created for plan=%s → %s",
+                sub.id, plan, sub.checkout_url)
+    return RedirectResponse(sub.checkout_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/thank-you", response_class=HTMLResponse)
