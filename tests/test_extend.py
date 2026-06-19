@@ -1,55 +1,93 @@
 """Tests for the /extend subscription sign-up flow.
 
-Mirrors the structure of ``test_buy.py`` — same fixtures, same httpx
-mock contract. /extend is intentionally simpler than /buy because there
-is no credit-bundle picker (the recurring monthly base is the only
-line item) and no per-plan duration (every plan recurs monthly).
+Like /buy, the subscription cards now come from the live catalog
+(GET /api/v1/catalog) — the subscription-capable public packages
+(starter/pro; trial is excluded server-side as a one-day evaluation).
+Every test that renders /extend registers a catalog response.
 """
 from __future__ import annotations
 
 import json as _json
 
 
-def test_extend_get_renders_form(client):
+# Subscription-capable packages carry subscription.available = true. trial
+# is present but not subscription-capable, so it must not appear on /extend.
+CATALOG = {
+    "currency": "usd",
+    "packages": [
+        {"tier": "trial", "display_name": "Trial",
+         "description": "One day to kick the tires.",
+         "featured": False, "default_credit_usd": 5,
+         "durations": [{"months": 1, "label": "24 hours", "price_cents": 0}],
+         "subscription": {"available": False, "price_cents": None}},
+        {"tier": "starter", "display_name": "Starter",
+         "description": "A month of assistant time.",
+         "featured": True, "default_credit_usd": 10,
+         "durations": [{"months": 1, "label": "1 month", "price_cents": 1500}],
+         "subscription": {"available": True, "price_cents": 1500}},
+        {"tier": "pro", "display_name": "Pro",
+         "description": "Faster model, longer context.",
+         "featured": False, "default_credit_usd": 0,
+         "durations": [{"months": 1, "label": "1 month", "price_cents": 3900}],
+         "subscription": {"available": True, "price_cents": 3900}},
+    ],
+}
+
+
+def _add_catalog(httpx_mock):
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/catalog",
+        json=CATALOG,
+        status_code=200,
+    )
+
+
+def test_extend_get_renders_form(client, httpx_mock):
+    _add_catalog(httpx_mock)
     resp = client.get("/extend")
     assert resp.status_code == 200
-    # All subscription plans appear as radios.
-    assert 'name="plan" value="s1"' in resp.text
-    assert 'name="plan" value="s2"' in resp.text
-    # Email + language fields are present.
+    # Subscription-capable public plans appear as radios.
+    assert 'name="plan" value="starter"' in resp.text
+    assert 'name="plan" value="pro"' in resp.text
+    # trial is not a recurring plan — and the retired slugs are gone.
+    assert 'name="plan" value="trial"' not in resp.text
+    for dead in ("s1", "s2", "s4"):
+        assert f'name="plan" value="{dead}"' not in resp.text
     assert 'name="email"' in resp.text
     assert 'name="language"' in resp.text
 
 
-def test_extend_get_preselects_plan_from_query(client):
-    resp = client.get("/extend?tier=s2")
+def test_extend_get_preselects_plan_from_query(client, httpx_mock):
+    _add_catalog(httpx_mock)
+    resp = client.get("/extend?tier=pro")
     assert resp.status_code == 200
-    s2_idx = resp.text.find('name="plan" value="s2"')
-    assert s2_idx >= 0
-    assert " checked" in resp.text[s2_idx : s2_idx + 200]
+    idx = resp.text.find('name="plan" value="pro"')
+    assert idx >= 0
+    assert " checked" in resp.text[idx : idx + 200]
 
 
-def test_extend_get_ignores_unknown_tier(client):
+def test_extend_get_ignores_unknown_tier(client, httpx_mock):
+    _add_catalog(httpx_mock)
     resp = client.get("/extend?tier=bogus")
     assert resp.status_code == 200
-    # No plan is pre-selected — none of the radios carry checked.
-    for slug in ("s1", "s2"):
+    for slug in ("starter", "pro"):
         idx = resp.text.find(f'name="plan" value="{slug}"')
         assert idx >= 0
         assert " checked" not in resp.text[idx : idx + 200]
 
 
-def test_extend_get_prefills_email_and_lang(client):
+def test_extend_get_prefills_email_and_lang(client, httpx_mock):
+    _add_catalog(httpx_mock)
     resp = client.get("/extend?email=user@example.com&lang=et")
     assert resp.status_code == 200
     assert 'value="user@example.com"' in resp.text
-    # Estonian option is selected.
     et_idx = resp.text.find('value="et"')
     assert et_idx >= 0
     assert "selected" in resp.text[et_idx : et_idx + 30]
 
 
 def test_extend_post_redirects_to_stripe(client, httpx_mock):
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/subscriptions",
         json={
@@ -63,7 +101,7 @@ def test_extend_post_redirects_to_stripe(client, httpx_mock):
     )
     resp = client.post(
         "/extend",
-        data={"plan": "s2", "email": "buyer@example.com", "language": "en"},
+        data={"plan": "pro", "email": "buyer@example.com", "language": "en"},
         follow_redirects=False,
     )
     assert resp.status_code == 303, resp.text
@@ -71,9 +109,9 @@ def test_extend_post_redirects_to_stripe(client, httpx_mock):
 
 
 def test_extend_post_sends_expected_body_to_mintoffice(client, httpx_mock):
-    """Regression — body shape MUST match the MintOffice
-    /subscriptions schema (tier, currency, language, success/cancel
-    URLs). Extra or missing fields surface as 422 in production."""
+    """Regression — body shape MUST match the MintOffice /subscriptions
+    schema (tier, currency, language, success/cancel URLs)."""
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/subscriptions",
         json={"checkout_url": "https://stripe.test/x"},
@@ -81,7 +119,7 @@ def test_extend_post_sends_expected_body_to_mintoffice(client, httpx_mock):
     )
     resp = client.post(
         "/extend",
-        data={"plan": "s1", "email": "a@b.c", "language": "et"},
+        data={"plan": "starter", "email": "a@b.c", "language": "et"},
         follow_redirects=False,
     )
     assert resp.status_code == 303, resp.text
@@ -91,7 +129,7 @@ def test_extend_post_sends_expected_body_to_mintoffice(client, httpx_mock):
     ]
     assert len(calls) == 1
     body = _json.loads(calls[0].content.decode())
-    assert body["tier"] == "s1"
+    assert body["tier"] == "starter"
     assert body["currency"] == "usd"
     assert body["language"] == "et"
     assert body["customer_email"] == "a@b.c"
@@ -102,17 +140,20 @@ def test_extend_post_sends_expected_body_to_mintoffice(client, httpx_mock):
     assert "credit_usd" not in body
 
 
-def test_extend_post_unknown_plan(client):
+def test_extend_post_unknown_plan(client, httpx_mock):
+    """trial is not subscription-capable, so it's not a valid /extend plan."""
+    _add_catalog(httpx_mock)
     resp = client.post("/extend", data={"plan": "trial", "language": "en"})
     assert resp.status_code == 422
 
 
-def test_extend_post_rejects_malformed_email(client):
-    """Server-side check — the form accepts ``type=email`` but a curl
-    bypass with no @ must 400 rather than hit MintOffice."""
+def test_extend_post_rejects_malformed_email(client, httpx_mock):
+    """Server-side check — a curl bypass with no @ must 400 rather than
+    hit MintOffice."""
+    _add_catalog(httpx_mock)
     resp = client.post(
         "/extend",
-        data={"plan": "s1", "email": "not-an-email", "language": "en"},
+        data={"plan": "starter", "email": "not-an-email", "language": "en"},
         follow_redirects=False,
     )
     assert resp.status_code == 400
@@ -120,6 +161,7 @@ def test_extend_post_rejects_malformed_email(client):
 
 
 def test_extend_post_surfaces_mintoffice_422(client, httpx_mock):
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/subscriptions",
         json={"error": {"code": "VALIDATION_ERROR", "message": "tier not allowed"}},
@@ -127,7 +169,7 @@ def test_extend_post_surfaces_mintoffice_422(client, httpx_mock):
     )
     resp = client.post(
         "/extend",
-        data={"plan": "s2", "email": "a@b.c", "language": "en"},
+        data={"plan": "pro", "email": "a@b.c", "language": "en"},
         follow_redirects=False,
     )
     assert resp.status_code == 502
@@ -135,6 +177,7 @@ def test_extend_post_surfaces_mintoffice_422(client, httpx_mock):
 
 
 def test_extend_post_handles_missing_checkout_url(client, httpx_mock):
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/subscriptions",
         json={"id": 1, "status": "pending", "checkout_url": ""},
@@ -142,7 +185,7 @@ def test_extend_post_handles_missing_checkout_url(client, httpx_mock):
     )
     resp = client.post(
         "/extend",
-        data={"plan": "s2", "email": "a@b.c", "language": "en"},
+        data={"plan": "pro", "email": "a@b.c", "language": "en"},
         follow_redirects=False,
     )
     assert resp.status_code == 502

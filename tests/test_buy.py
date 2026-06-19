@@ -1,10 +1,57 @@
+"""Tests for the /buy one-shot order flow.
+
+The storefront's plan cards now come from GET /api/v1/catalog (the live,
+partner-scoped package list) instead of a hard-coded PLANS dict — so every
+test that renders /buy or posts to it registers a catalog response. The
+public package slugs are trial/starter/pro; the retired s1/s2/s4 slugs are
+gone and must never reappear.
+"""
 import sys
 
 import pytest
 from unittest.mock import patch
 
 
+# A representative live catalog as MintOffice's GET /api/v1/catalog returns
+# it: public packages only (trial/starter/pro), partner-resolved prices in
+# the partner's currency. pytest-httpx reuses a registered response for
+# every matching request, so one registration covers repeated fetches.
+CATALOG = {
+    "currency": "usd",
+    "packages": [
+        {"tier": "trial", "display_name": "Trial",
+         "description": "One day to kick the tires.",
+         "featured": False, "default_credit_usd": 5,
+         "durations": [{"months": 1, "label": "24 hours", "price_cents": 0}],
+         "subscription": {"available": False, "price_cents": None}},
+        {"tier": "starter", "display_name": "Starter",
+         "description": "A month of assistant time.",
+         "featured": True, "default_credit_usd": 10,
+         "durations": [{"months": 1, "label": "1 month", "price_cents": 1500},
+                       {"months": 3, "label": "3 months", "price_cents": 4500},
+                       {"months": 12, "label": "12 months", "price_cents": 18000}],
+         "subscription": {"available": True, "price_cents": 1500}},
+        {"tier": "pro", "display_name": "Pro",
+         "description": "Faster model, longer context.",
+         "featured": False, "default_credit_usd": 0,
+         "durations": [{"months": 1, "label": "1 month", "price_cents": 3900},
+                       {"months": 3, "label": "3 months", "price_cents": 11700},
+                       {"months": 12, "label": "12 months", "price_cents": 46800}],
+         "subscription": {"available": True, "price_cents": 3900}},
+    ],
+}
+
+
+def _add_catalog(httpx_mock, catalog=None):
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/catalog",
+        json=catalog if catalog is not None else CATALOG,
+        status_code=200,
+    )
+
+
 def test_buy_shows_credit_options_from_partner_settings(client, httpx_mock):
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
         json={"allowed_credit_options": [10, 20]},
@@ -17,7 +64,26 @@ def test_buy_shows_credit_options_from_partner_settings(client, httpx_mock):
     assert 'value="0"' in resp.text  # VPS-only option always present
 
 
+def test_buy_lists_public_packages_only(client, httpx_mock):
+    """Regression — the storefront must render the live catalog's public
+    packages (trial/starter/pro) and never the retired s1/s2/s4 slugs."""
+    _add_catalog(httpx_mock)
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [10]},
+        status_code=200,
+    )
+    resp = client.get("/buy")
+    assert resp.status_code == 200
+    assert 'name="plan" value="starter"' in resp.text
+    assert 'name="plan" value="pro"' in resp.text
+    assert 'name="plan" value="trial"' in resp.text
+    for dead in ("s1", "s2", "s4"):
+        assert f'name="plan" value="{dead}"' not in resp.text
+
+
 def test_buy_no_credit_options_shows_hidden_input(client, httpx_mock):
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
         json={"allowed_credit_options": []},
@@ -30,51 +96,47 @@ def test_buy_no_credit_options_shows_hidden_input(client, httpx_mock):
 
 
 def test_buy_pre_selects_plan_from_query_string(client, httpx_mock):
-    """Regression — the earlier assertion just checked that `checked`
-    appeared anywhere on the page, but the credit radios are *also*
-    `checked` by default (first option). Tighten the check so it
-    actually verifies the s1 plan radio is the selected one."""
+    """Regression — the credit radios are *also* `checked` by default
+    (first option), so verify the plan radio specifically is the selected
+    one and no other plan radio carries checked."""
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
         json={"allowed_credit_options": [10, 20, 50]},
         status_code=200,
     )
-    resp = client.get("/buy?plan=s1")
+    resp = client.get("/buy?plan=starter")
     assert resp.status_code == 200
-    # The s1 plan radio carries the checked attribute.
-    assert 'name="plan" value="s1"' in resp.text
-    assert 'name="plan" value="s1" required' in resp.text  # sanity
-    s1_radio_idx = resp.text.find('name="plan" value="s1"')
-    # Look at the next 200 chars after the s1 radio for the checked
-    # attribute — the template appends it inline on the same <input>.
-    snippet = resp.text[s1_radio_idx : s1_radio_idx + 200]
+    assert 'name="plan" value="starter" required' in resp.text  # sanity
+    idx = resp.text.find('name="plan" value="starter"')
+    snippet = resp.text[idx : idx + 200]
     assert " checked" in snippet, snippet
-    # And confirm no *other* plan radio carries checked.
-    for other in ("trial", "s2"):
-        idx = resp.text.find(f'name="plan" value="{other}"')
-        assert idx >= 0
-        assert " checked" not in resp.text[idx : idx + 200]
+    for other in ("trial", "pro"):
+        oidx = resp.text.find(f'name="plan" value="{other}"')
+        assert oidx >= 0
+        assert " checked" not in resp.text[oidx : oidx + 200]
 
 
 def test_buy_post_with_credit_usd(client, httpx_mock):
-    # Partner settings fetched once when the POST validates credit_usd.
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
-        json={"allowed_credit_options": [10, 20, 50]},
+        json={"allowed_credit_options": [10]},
         status_code=200,
     )
-    httpx_mock.add_response(json={"checkout_url": "https://stripe.test/pay"}, status_code=200)
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/orders",
+        json={"checkout_url": "https://stripe.test/pay"}, status_code=200,
+    )
     resp = client.post("/buy", data={"plan": "trial", "credit_usd": "10", "idempotency_key_form": "key123"}, follow_redirects=False)
     assert resp.status_code == 303
 
 
 def test_buy_post_sends_duration_months_to_mintoffice(client, httpx_mock):
     """Regression — the Brand Partner API takes ``duration_months`` (1/3/12),
-    not ``duration_days`` (extra="forbid" on MintOffice's pydantic schema, so
-    any drift here surfaces as a 422 in production). The other tests stub the
-    /orders response without validating the request body, so this is the only
-    place that catches the rename. Don't loosen the assertion."""
+    not ``duration_days``. Don't loosen the assertion."""
     import json as _json
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
         json={"allowed_credit_options": [10]},
@@ -87,7 +149,7 @@ def test_buy_post_sends_duration_months_to_mintoffice(client, httpx_mock):
     )
     resp = client.post(
         "/buy",
-        data={"plan": "s1", "credit_usd": "10"},
+        data={"plan": "starter", "credit_usd": "10"},
         follow_redirects=False,
     )
     assert resp.status_code == 303, resp.text
@@ -99,18 +161,20 @@ def test_buy_post_sends_duration_months_to_mintoffice(client, httpx_mock):
     body = _json.loads(order_calls[0].content.decode())
     assert "duration_months" in body, body
     assert body["duration_months"] == 1
+    assert body["tier"] == "starter"
     assert "duration_days" not in body, body
 
 
-def test_buy_post_unknown_plan(client):
+def test_buy_post_unknown_plan(client, httpx_mock):
+    _add_catalog(httpx_mock)
     resp = client.post("/buy", data={"plan": "unknown", "credit_usd": "0"})
     assert resp.status_code == 422
 
 
 def test_buy_post_rejects_disallowed_credit_usd(client, httpx_mock):
-    """Server-side allow-list — the form lets the customer pick from
-    [10, 20] but a hand-crafted POST with credit_usd=50 must 400, not
-    pass through to MintOffice."""
+    """Server-side allow-list — a hand-crafted POST with credit_usd=50
+    when the partner only allows [10, 20] must 400, not pass through."""
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
         json={"allowed_credit_options": [10, 20]},
@@ -118,7 +182,7 @@ def test_buy_post_rejects_disallowed_credit_usd(client, httpx_mock):
     )
     resp = client.post(
         "/buy",
-        data={"plan": "s1", "credit_usd": "50"},
+        data={"plan": "starter", "credit_usd": "50"},
         follow_redirects=False,
     )
     assert resp.status_code == 400, resp.text
@@ -126,9 +190,8 @@ def test_buy_post_rejects_disallowed_credit_usd(client, httpx_mock):
 
 
 def test_buy_post_accepts_zero_credit_even_when_options_set(client, httpx_mock):
-    """0 (VPS-only) is always allowed regardless of the partner's
-    bundle list, because the /buy template renders a dedicated
-    'No credit — VPS only' radio."""
+    """0 (VPS-only) is always allowed regardless of the partner's list."""
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
         json={"allowed_credit_options": [10, 20]},
@@ -141,21 +204,19 @@ def test_buy_post_accepts_zero_credit_even_when_options_set(client, httpx_mock):
     )
     resp = client.post(
         "/buy",
-        data={"plan": "s1", "credit_usd": "0"},
+        data={"plan": "starter", "credit_usd": "0"},
         follow_redirects=False,
     )
     assert resp.status_code == 303, resp.text
 
 
 def test_buy_post_missing_api_key_shows_maintenance(client, monkeypatch, caplog):
-    """Regression — when MINTOFFICE_API_KEY is empty, the customer must
-    see a maintenance message (503), NOT the misleading "could not
-    reach checkout" transport-error message. And the operator must see
-    a loud ERROR log so monitoring picks it up.
+    """Regression — empty MINTOFFICE_API_KEY must surface a maintenance
+    message (503) and a loud ERROR log, not the misleading transport
+    message. With no key the catalog fetch fails too and the storefront
+    falls back to its cold-start catalog (which still carries starter).
 
-    Uses ``credit_usd=0`` (VPS-only) so we bypass the credit-allowlist
-    guard — the partner-settings fetch can't help here anyway, since
-    that call also needs the API key.
+    Uses ``credit_usd=0`` (VPS-only) to bypass the credit-allowlist guard.
     """
     import logging
     from app import main as main_mod
@@ -163,7 +224,7 @@ def test_buy_post_missing_api_key_shows_maintenance(client, monkeypatch, caplog)
     with caplog.at_level(logging.ERROR, logger="partner_portal"):
         resp = client.post(
             "/buy",
-            data={"plan": "s1", "credit_usd": "0"},
+            data={"plan": "starter", "credit_usd": "0"},
             follow_redirects=False,
         )
     assert resp.status_code == 503, resp.text
@@ -175,11 +236,10 @@ def test_buy_post_missing_api_key_shows_maintenance(client, monkeypatch, caplog)
 
 
 def test_buy_post_401_logs_credential_failure(client, httpx_mock, caplog):
-    """Regression — a revoked or mistyped API key returns 401 from
-    MintOffice. The customer sees the maintenance message (503), not
-    the format_error chatter; the operator sees a flagged log line so
-    rotation is obvious from grep."""
+    """Regression — a revoked/mistyped key returns 401. Customer sees the
+    maintenance message (503); the operator sees a flagged log line."""
     import logging
+    _add_catalog(httpx_mock)
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
         json={"allowed_credit_options": [10]},
@@ -193,7 +253,7 @@ def test_buy_post_401_logs_credential_failure(client, httpx_mock, caplog):
     with caplog.at_level(logging.ERROR, logger="partner_portal"):
         resp = client.post(
             "/buy",
-            data={"plan": "s1", "credit_usd": "10"},
+            data={"plan": "starter", "credit_usd": "10"},
             follow_redirects=False,
         )
     assert resp.status_code == 503, resp.text
@@ -204,9 +264,11 @@ def test_buy_post_401_logs_credential_failure(client, httpx_mock, caplog):
 
 
 def test_credit_cache_sticky_on_failure(client, httpx_mock):
-    """Regression — if the first MintOffice fetch succeeds and the next
-    one fails, the cache must keep the previously-seen good value
-    instead of poisoning itself with an empty list."""
+    """Regression — if the first settings fetch succeeds and the next
+    fails, the cache keeps the last good value instead of poisoning
+    itself with an empty list. (The catalog is cached separately and
+    stays warm across both /buy calls.)"""
+    _add_catalog(httpx_mock)
     # First request: good answer.
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
@@ -218,12 +280,12 @@ def test_credit_cache_sticky_on_failure(client, httpx_mock):
     assert 'value="10"' in r1.text
     assert 'value="20"' in r1.text
 
-    # Force the cached value to look stale so the next /buy refetches.
+    # Force the cached credit value to look stale so the next /buy refetches.
     main_mod = sys.modules.get("app.main")
     assert main_mod is not None
     main_mod._credit_options_cache["expires_at"] = 0.0
 
-    # Second request: MintOffice 502s.
+    # Second request: MintOffice 502s on settings.
     httpx_mock.add_response(
         url="http://mintoffice.test/api/v1/settings",
         status_code=502,
@@ -233,7 +295,4 @@ def test_credit_cache_sticky_on_failure(client, httpx_mock):
     # Sticky: prior options still rendered, NOT the VPS-only fallback.
     assert 'value="10"' in r2.text
     assert 'value="20"' in r2.text
-    # The hidden-fallback ``<input type="hidden" name="credit_usd"`` only
-    # appears when the cache is empty (zero options). It must not appear
-    # here — that would mean the cache got poisoned.
     assert 'type="hidden" name="credit_usd"' not in r2.text

@@ -131,43 +131,186 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 
-# Sample plans. Keys are the MintOffice tier slug so ``?plan=s1`` deep
-# links route correctly. Edit freely; the only constraint is that
-# ``tier`` is one of MintOffice's allowed tiers (trial, s1, s2, s4) and
-# ``duration_months`` is one of 1, 3, 12. Credit is no longer baked into
-# the plan — the customer picks an LLM credit bundle on the /buy form
-# (or "no credit / VPS only" to bring their own API key).
+# ---------------------------------------------------------------------------
+# Package catalog — fetched live from MintOffice, NOT hard-coded.
 #
-# Trial note: ``duration_months=1`` is required by the MintOffice API
-# shape, but MintOffice special-cases trial to a fixed 24h server
-# lifetime regardless of the months value — the partner pays the trial
-# base once.
-PLANS = {
-    "trial": {
-        "label": "Trial · 24h",
-        "tier": "trial",
-        "duration_months": 1,
-        "price_cents": 0,
-        "blurb": "One day to kick the tires.",
-        "featured": False,
-    },
-    "s1": {
-        "label": "Basic · 1 month",
-        "tier": "s1",
-        "duration_months": 1,
-        "price_cents": 1500,
-        "blurb": "A month of assistant time.",
-        "featured": False,
-    },
-    "s2": {
-        "label": "Pro · 1 month",
-        "tier": "s2",
-        "duration_months": 1,
-        "price_cents": 3900,
-        "blurb": "Faster model, longer context.",
-        "featured": True,
-    },
+# The storefront's plan cards come from GET /api/v1/catalog: the PUBLIC
+# package list (trial/starter/pro) joined with THIS partner's resolved
+# pricing, in the partner's currency. Retired packages disappear and a
+# price/currency change in MintOffice lands within the cache TTL — no
+# portal redeploy. This is what keeps the storefront from advertising
+# yesterday's packages (the old hard-coded s1/s2 problem).
+#
+# You (the partner) still own marketing copy: PLAN_OVERRIDES lets you
+# rename a package or rewrite its blurb in your fork without touching
+# MintOffice. Everything you don't override — which packages exist, the
+# price, the currency — comes from MintOffice and self-updates.
+# ---------------------------------------------------------------------------
+
+# Per-slug display overrides, applied on top of the canonical catalog copy.
+# Leave empty to use MintOffice's display_name/description verbatim. e.g.:
+#   PLAN_OVERRIDES = {
+#       "starter": {"label": "Indie", "blurb": "Perfect for side projects."},
+#       "pro":     {"blurb": "Our most popular plan."},
+#   }
+# ``label`` overrides the whole card title; the '· <period>' suffix is
+# only auto-appended when you DON'T override the label, so an override is
+# verbatim.
+PLAN_OVERRIDES: dict[str, dict[str, str]] = {}
+
+# Cold-start fallback. Used ONLY when MintOffice has never been reachable
+# since this process started (first request during an outage). Uses the
+# CURRENT public slugs — never the retired s1/s2/s4 — so even the fallback
+# can't resurrect a dead package. Prices are indicative; the real price
+# always comes from the live catalog and, ultimately, from the Stripe
+# Checkout session MintOffice mints.
+FALLBACK_CATALOG: dict = {
+    "currency": "usd",
+    "packages": [
+        {"tier": "trial", "display_name": "Trial",
+         "description": "One day to kick the tires.",
+         "featured": False, "default_credit_usd": 5,
+         "durations": [{"months": 1, "label": "24 hours", "price_cents": 0}],
+         "subscription": {"available": False, "price_cents": None}},
+        {"tier": "starter", "display_name": "Starter",
+         "description": "A month of assistant time.",
+         "featured": True, "default_credit_usd": 10,
+         "durations": [{"months": 1, "label": "1 month", "price_cents": 1500},
+                       {"months": 3, "label": "3 months", "price_cents": 4500},
+                       {"months": 12, "label": "12 months", "price_cents": 18000}],
+         "subscription": {"available": True, "price_cents": 1500}},
+        {"tier": "pro", "display_name": "Pro",
+         "description": "Faster model, longer context.",
+         "featured": False, "default_credit_usd": 0,
+         "durations": [{"months": 1, "label": "1 month", "price_cents": 3900},
+                       {"months": 3, "label": "3 months", "price_cents": 11700},
+                       {"months": 12, "label": "12 months", "price_cents": 46800}],
+         "subscription": {"available": True, "price_cents": 3900}},
+    ],
 }
+
+_CURRENCY_SYMBOLS = {"usd": "$", "eur": "\u20ac", "gbp": "\u00a3"}
+
+
+def _format_money(cents: int, currency: str) -> str:
+    """Currency-aware whole-unit price string, e.g. '$15' or '\u20ac15'.
+
+    Whole units only — the storefront cards are deliberately round. A
+    symbol currency (usd/eur/gbp) renders as '$15'; anything else renders
+    as '15 SEK'-style with the uppercased ISO code so an unmapped currency
+    never silently shows a bare number.
+    """
+    whole = round(cents / 100)
+    sym = _CURRENCY_SYMBOLS.get(currency.lower())
+    return f"{sym}{whole}" if sym else f"{whole} {currency.upper()}"
+
+
+# Catalog cache — same sticky-on-failure contract as the credit-options
+# cache below. A transient MintOffice blip keeps the last good catalog
+# instead of collapsing the storefront to the cold-start fallback.
+_CATALOG_TTL_SECONDS = 300
+_CATALOG_RETRY_SECONDS = 30
+_catalog_cache: dict[str, object] = {"value": None, "expires_at": 0.0}
+
+
+def _get_catalog() -> dict:
+    """Return the partner's package catalog for rendering.
+
+    Cache miss → fetch from MintOffice. Fetch failure → keep the last good
+    catalog (sticky); if MintOffice has never been reached this process,
+    use FALLBACK_CATALOG so the storefront still renders something.
+    """
+    now = time.time()
+    cached = _catalog_cache["value"]
+    expires_at = float(_catalog_cache["expires_at"])  # type: ignore[arg-type]
+    if cached is not None and expires_at > now:
+        return cached  # type: ignore[return-value]
+    fetched = mintoffice.get_catalog()
+    if fetched is not None:
+        _catalog_cache["value"] = fetched
+        _catalog_cache["expires_at"] = now + _CATALOG_TTL_SECONDS
+        return fetched
+    _catalog_cache["expires_at"] = now + _CATALOG_RETRY_SECONDS
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+    return FALLBACK_CATALOG
+
+
+def _apply_overrides(slug: str, label: str, blurb: str) -> tuple[str, str]:
+    ov = PLAN_OVERRIDES.get(slug) or {}
+    return (ov.get("label") or label, ov.get("blurb") or blurb)
+
+
+def _primary_duration(pkg: dict) -> dict:
+    """The duration a one-shot /buy card bills at — the package's shortest
+    offered duration (trial→24h, monthly packages→1 month)."""
+    durations = pkg.get("durations") or []
+    if not durations:
+        return {"months": 1, "label": "", "price_cents": 0}
+    return min(durations, key=lambda d: int(d.get("months") or 0) or 1)
+
+
+def _order_plans() -> dict[str, dict]:
+    """One-shot /buy + landing plan cards, built from the live catalog.
+
+    One card per public package, billed at its primary duration. The label
+    carries '<name> · <period>' so the landing CTA's split keeps working
+    and the customer sees the duration at a glance.
+
+    Trial note: ``duration_months`` is sent as 1 to satisfy the MintOffice
+    API shape, but MintOffice special-cases trial to a fixed 24h server
+    lifetime regardless of the months value.
+    """
+    catalog = _get_catalog()
+    currency = str(catalog.get("currency") or "usd")
+    plans: dict[str, dict] = {}
+    for pkg in catalog.get("packages") or []:
+        slug = str(pkg["tier"])
+        dur = _primary_duration(pkg)
+        label_base = str(pkg.get("display_name") or slug.title())
+        period = str(dur.get("label") or "")
+        label = f"{label_base} \u00b7 {period}" if period else label_base
+        blurb = str(pkg.get("description") or "")
+        label, blurb = _apply_overrides(slug, label, blurb)
+        price_cents = int(dur.get("price_cents") or 0)
+        plans[slug] = {
+            "label": label,
+            "tier": slug,
+            "duration_months": int(dur.get("months") or 1),
+            "price_cents": price_cents,
+            "price_display": _format_money(price_cents, currency),
+            "blurb": blurb,
+            "featured": bool(pkg.get("featured")),
+        }
+    return plans
+
+
+def _subscription_plans() -> dict[str, dict]:
+    """/extend monthly subscription cards, built from the live catalog —
+    only packages MintOffice marks subscription-capable (trial is excluded
+    server-side: it's a one-day evaluation, not a recurring plan)."""
+    catalog = _get_catalog()
+    currency = str(catalog.get("currency") or "usd")
+    plans: dict[str, dict] = {}
+    for pkg in catalog.get("packages") or []:
+        sub = pkg.get("subscription") or {}
+        if not sub.get("available"):
+            continue
+        slug = str(pkg["tier"])
+        label_base = str(pkg.get("display_name") or slug.title())
+        label = f"{label_base} \u00b7 monthly"
+        blurb = str(pkg.get("description") or "")
+        label, blurb = _apply_overrides(slug, label, blurb)
+        price_cents = int(sub.get("price_cents") or 0)
+        plans[slug] = {
+            "label": label,
+            "tier": slug,
+            "price_cents": price_cents,
+            "price_display": _format_money(price_cents, currency),
+            "blurb": blurb,
+            "featured": bool(pkg.get("featured")),
+        }
+    return plans
 
 
 # Cache of the partner's ``allowed_credit_options`` so the /buy form
@@ -281,16 +424,17 @@ def healthz() -> Response:
 
 @app.get("/", response_class=HTMLResponse)
 def landing(request: Request) -> HTMLResponse:
-    return _render(request, "index.html", {"plans": PLANS})
+    return _render(request, "index.html", {"plans": _order_plans()})
 
 
 @app.get("/buy", response_class=HTMLResponse)
 def buy_form(request: Request, plan: str | None = None) -> HTMLResponse:
     """Plan picker. ``?plan=<slug>`` pre-selects a card so the landing
     page's per-plan CTA lands the customer on the right option."""
-    selected = plan if plan in PLANS else None
+    plans = _order_plans()
+    selected = plan if plan in plans else None
     return _render(request, "buy.html", {
-        "plans": PLANS,
+        "plans": plans,
         "selected": selected,
         "credit_options": _get_credit_options(),
         "error": None,
@@ -305,7 +449,8 @@ def buy_submit(
     credit_usd: int = Form(0),
     idempotency_key_form: str = Form(""),
 ) -> Response:
-    spec = PLANS.get(plan)
+    plans = _order_plans()
+    spec = plans.get(plan)
     if not spec:
         raise HTTPException(status_code=422, detail=f"unknown plan: {plan}")
     if credit_usd < 0:
@@ -320,7 +465,7 @@ def buy_submit(
             credit_usd, options,
         )
         return _render(request, "buy.html", {
-            "plans": PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "credit_options": options,
             "error": "That credit bundle isn't available — please pick one of the listed options.",
         }, status_code=400)
@@ -345,7 +490,7 @@ def buy_submit(
         # so the operator notices: this won't fix itself.
         logger.error("Portal misconfigured — cannot call MintOffice: %s", e)
         return _render(request, "buy.html", {
-            "plans": PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "credit_options": _get_credit_options(),
             "error": "Checkout is temporarily unavailable — please try again shortly.",
         }, status_code=503)
@@ -362,13 +507,13 @@ def buy_submit(
                 e.status_code, e.body,
             )
             return _render(request, "buy.html", {
-                "plans": PLANS, "selected": plan,
+                "plans": plans, "selected": plan,
                 "credit_options": _get_credit_options(),
                 "error": "Checkout is temporarily unavailable — please try again shortly.",
             }, status_code=503)
         logger.warning("MintOffice rejected order: %s", e)
         return _render(request, "buy.html", {
-            "plans": PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "credit_options": _get_credit_options(),
             "error": mintoffice.format_error(e),
         }, status_code=502)
@@ -377,53 +522,26 @@ def buy_submit(
         # original "could not reach checkout" message is accurate here.
         logger.warning("MintOffice transport failure: %s: %s", type(e).__name__, e)
         return _render(request, "buy.html", {
-            "plans": PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "credit_options": _get_credit_options(),
             "error": "Could not reach checkout — please try again in a minute.",
         }, status_code=502)
     except Exception:  # noqa: BLE001
         logger.exception("MintOffice call blew up")
         return _render(request, "buy.html", {
-            "plans": PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "credit_options": _get_credit_options(),
             "error": "Could not reach checkout — please try again in a minute.",
         }, status_code=502)
     if not order.checkout_url:
         return _render(request, "buy.html", {
-            "plans": PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "credit_options": _get_credit_options(),
             "error": "MintOffice didn't return a checkout URL.",
         }, status_code=502)
     logger.info("Order %d created for plan=%s credit=%d → %s",
                 order.id, plan, credit_usd, order.checkout_url)
     return RedirectResponse(order.checkout_url, status_code=status.HTTP_303_SEE_OTHER)
-
-
-# Tiers offered as monthly subscriptions on /extend. Same shape as
-# PLANS above but recurring rather than one-shot. Trial is intentionally
-# absent — it's a one-day evaluation, not a recurring plan. Edit freely;
-# the only constraint is that ``tier`` is one of MintOffice's allowed
-# tiers (s1, s2, s4). The price strings are for display only — the
-# authoritative monthly price comes back from MintOffice on
-# checkout creation (so a partner-pricing change in MintOffice is
-# reflected on the real Stripe Checkout page even if you forget to
-# update this table).
-SUBSCRIPTION_PLANS = {
-    "s1": {
-        "label": "Basic · monthly",
-        "tier": "s1",
-        "price_cents": 1500,
-        "blurb": "A month of assistant time, auto-renewed.",
-        "featured": False,
-    },
-    "s2": {
-        "label": "Pro · monthly",
-        "tier": "s2",
-        "price_cents": 3900,
-        "blurb": "Faster model, longer context. Cancel any time.",
-        "featured": True,
-    },
-}
 
 
 @app.get("/extend", response_class=HTMLResponse)
@@ -444,9 +562,10 @@ def extend_form(
     The page works without any of them — the user can still pick a
     plan and enter their email manually.
     """
-    selected = tier if tier in SUBSCRIPTION_PLANS else None
+    plans = _subscription_plans()
+    selected = tier if tier in plans else None
     return _render(request, "extend.html", {
-        "plans": SUBSCRIPTION_PLANS,
+        "plans": plans,
         "selected": selected,
         "prefill_email": email or "",
         "prefill_lang": (lang or "en").strip().lower() or "en",
@@ -462,13 +581,14 @@ def extend_submit(
     language: str = Form("en"),
     idempotency_key_form: str = Form(""),
 ) -> Response:
-    spec = SUBSCRIPTION_PLANS.get(plan)
+    plans = _subscription_plans()
+    spec = plans.get(plan)
     if not spec:
         raise HTTPException(status_code=422, detail=f"unknown plan: {plan}")
     email_clean = email.strip() or None
     if email_clean and "@" not in email_clean:
         return _render(request, "extend.html", {
-            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "prefill_email": email_clean, "prefill_lang": language,
             "error": "That doesn't look like an email address.",
         }, status_code=400)
@@ -488,7 +608,7 @@ def extend_submit(
     except mintoffice.MintOfficeConfigError as e:
         logger.error("Portal misconfigured — cannot call MintOffice: %s", e)
         return _render(request, "extend.html", {
-            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "prefill_email": email_clean or "", "prefill_lang": language,
             "error": "Checkout is temporarily unavailable — please try again shortly.",
         }, status_code=503)
@@ -500,33 +620,33 @@ def extend_submit(
                 e.status_code, e.body,
             )
             return _render(request, "extend.html", {
-                "plans": SUBSCRIPTION_PLANS, "selected": plan,
+                "plans": plans, "selected": plan,
                 "prefill_email": email_clean or "", "prefill_lang": language,
                 "error": "Checkout is temporarily unavailable — please try again shortly.",
             }, status_code=503)
         logger.warning("MintOffice rejected subscription: %s", e)
         return _render(request, "extend.html", {
-            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "prefill_email": email_clean or "", "prefill_lang": language,
             "error": mintoffice.format_error(e),
         }, status_code=502)
     except (httpx.TransportError, httpx.TimeoutException) as e:
         logger.warning("MintOffice transport failure: %s: %s", type(e).__name__, e)
         return _render(request, "extend.html", {
-            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "prefill_email": email_clean or "", "prefill_lang": language,
             "error": "Could not reach checkout — please try again in a minute.",
         }, status_code=502)
     except Exception:  # noqa: BLE001
         logger.exception("MintOffice subscription call blew up")
         return _render(request, "extend.html", {
-            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "prefill_email": email_clean or "", "prefill_lang": language,
             "error": "Could not reach checkout — please try again in a minute.",
         }, status_code=502)
     if not sub.checkout_url:
         return _render(request, "extend.html", {
-            "plans": SUBSCRIPTION_PLANS, "selected": plan,
+            "plans": plans, "selected": plan,
             "prefill_email": email_clean or "", "prefill_lang": language,
             "error": "MintOffice didn't return a checkout URL.",
         }, status_code=502)

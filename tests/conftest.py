@@ -65,8 +65,15 @@ def _reset_buy_cache():
     """
     def _wipe():
         main_mod = sys.modules.get("app.main")
-        if main_mod is not None and hasattr(main_mod, "_credit_options_cache"):
+        if main_mod is None:
+            return
+        if hasattr(main_mod, "_credit_options_cache"):
             main_mod._credit_options_cache = {"value": None, "expires_at": 0.0}
+        # The /buy, /, and /extend routes also cache the live package
+        # catalog (GET /api/v1/catalog). Reset it too so each test starts
+        # from a cold cache and its own mocked catalog response wins.
+        if hasattr(main_mod, "_catalog_cache"):
+            main_mod._catalog_cache = {"value": None, "expires_at": 0.0}
     _wipe()
     yield
     _wipe()

@@ -27,6 +27,11 @@ def _fresh_app(monkeypatch, tmp_path, **env):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import app.main as main_mod  # noqa: WPS433
     main_mod.db.init_db()
+    # These tests point at the REAL mint.mintbot.{dev,ai} hosts to exercise
+    # the TEST-mode banner logic, and the landing page now fetches the live
+    # catalog -- stub the fetch to keep the suite offline (the cold-start
+    # FALLBACK_CATALOG renders the cards).
+    monkeypatch.setattr(main_mod.mintoffice, "get_catalog", lambda: None)
     return main_mod
 
 

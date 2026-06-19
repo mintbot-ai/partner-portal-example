@@ -257,6 +257,65 @@ def create_subscription(
     )
 
 
+def get_catalog() -> dict | None:
+    """GET /api/v1/catalog → the partner's sellable package catalog.
+
+    MintOffice returns the PUBLIC package list (trial/starter/pro) joined
+    with THIS partner's resolved pricing, in their pricing currency:
+
+        {
+          "currency": "usd",
+          "packages": [
+            {"tier": "starter", "display_name": "Starter",
+             "description": "...", "featured": true,
+             "default_credit_usd": 10,
+             "durations": [{"months": 1, "label": "1 month",
+                            "price_cents": 1500}, ...],
+             "subscription": {"available": true, "price_cents": 1500}},
+            ...
+          ]
+        }
+
+    Three-state return, same contract as ``get_allowed_credit_options``:
+
+    - ``dict``: authoritative catalog from MintOffice. The storefront
+      should render exactly these packages — retired tiers are already
+      filtered out server-side, so a package that disappears upstream
+      disappears from the storefront on the next fetch.
+    - ``None``: the call failed (missing API key, transport error, non-2xx,
+      malformed body). The caller should fall back to its last known good
+      catalog (or a static fallback on a cold start) rather than render an
+      empty storefront from a single blip.
+
+    Only the minimum shape is validated here — ``packages`` must be a list
+    of dicts that each carry a ``tier``. Anything malformed collapses to
+    ``None`` so the caller's sticky cache takes over.
+    """
+    try:
+        with _client() as c:
+            r = c.get("/catalog")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not reach MintOffice /catalog: %s", exc)
+        return None
+    if r.status_code >= 400:
+        logger.warning("MintOffice /catalog returned %s", r.status_code)
+        return None
+    try:
+        payload = r.json()
+    except ValueError:
+        logger.warning("MintOffice /catalog returned non-JSON body")
+        return None
+    if not isinstance(payload, dict):
+        return None
+    packages = payload.get("packages")
+    if not isinstance(packages, list) or not all(
+        isinstance(p, dict) and p.get("tier") for p in packages
+    ):
+        logger.warning("MintOffice /catalog body malformed (no usable packages)")
+        return None
+    return payload
+
+
 def get_allowed_credit_options() -> list[int] | None:
     """GET /api/v1/settings → list of credit bundle sizes the partner allows.
 

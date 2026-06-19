@@ -19,7 +19,7 @@
               <span class="dim" style="display:block;font-size:0.875rem;margin-top:0.125rem">{{ plan.blurb }}</span>
             </span>
             <span class="badge">
-              {% if plan.price_cents == 0 %}Free{% else %}${{ "%.0f"|format(plan.price_cents / 100) }}{% endif %}
+              {% if plan.price_cents == 0 %}Free{% else %}{{ plan.price_display }}{% endif %}
             </span>
           </label>
         {% endfor %}

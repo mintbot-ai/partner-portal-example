@@ -206,8 +206,14 @@ The default templates pretend to be **ExampleAI**. Change:
   Tweak those for a colour rebrand without touching markup. The two
   accent colours flow into the brand-mark dot, button gradients, focus
   rings, and the featured-plan ribbon.
-- `app/main.py` — `PLANS` dict has the plan slugs, prices (in cents),
-  blurbs, and a `featured` flag that adds the "Recommended" ribbon.
+- Plan cards are **fetched live** from MintOffice (`GET /api/v1/catalog`)
+  — package list, prices, currency, and the `featured` ribbon all come
+  from your dashboard, so retired packages drop off and price changes
+  land without a redeploy. To rename a package or rewrite its blurb for
+  your brand, fill in the `PLAN_OVERRIDES` map in `app/main.py`
+  (everything you don't override comes from MintOffice). `FALLBACK_CATALOG`
+  in the same file is the cold-start list used only if MintOffice has
+  never been reachable since the process started.
 - The rest of `app/templates/*.html` — copy lives here. Estonian /
   Spanish / etc. translations: fork these files.
 
