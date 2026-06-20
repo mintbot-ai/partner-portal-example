@@ -167,6 +167,13 @@ def test_buy_post_sends_duration_months_to_mintoffice(client, httpx_mock):
 
 def test_buy_post_unknown_plan(client, httpx_mock):
     _add_catalog(httpx_mock)
+    # Building the plan cards now also resolves per-package credit options,
+    # so a /settings fetch happens before the unknown-plan 422.
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [10]},
+        status_code=200,
+    )
     resp = client.post("/buy", data={"plan": "unknown", "credit_usd": "0"})
     assert resp.status_code == 422
 
@@ -296,3 +303,161 @@ def test_credit_cache_sticky_on_failure(client, httpx_mock):
     assert 'value="10"' in r2.text
     assert 'value="20"' in r2.text
     assert 'type="hidden" name="credit_usd"' not in r2.text
+
+
+# ---------------------------------------------------------------------------
+# Per-package credit (Variant B) -- each plan card carries its own credit
+# group, named credit_<slug>, with the package's default_credit pre-picked
+# and the combined order total (plan + credit) precomputed server-side.
+# ---------------------------------------------------------------------------
+
+# Catalog WITH the credit_options price block MintOffice now returns. $10 of
+# credit costs 1000c here (USD 1:1); the storefront uses these for the live
+# per-option total, never doing its own FX.
+CATALOG_CREDIT = {
+    "currency": "usd",
+    "packages": CATALOG["packages"],
+    "credit_options": [
+        {"usd": 5, "price_cents": 500},
+        {"usd": 10, "price_cents": 1000},
+        {"usd": 20, "price_cents": 2000},
+        {"usd": 50, "price_cents": 5000},
+    ],
+}
+
+
+def test_buy_uses_per_package_credit_field_names(client, httpx_mock):
+    """Each plan's credit radios are namespaced credit_<slug> so every card
+    keeps its own selection + default."""
+    _add_catalog(httpx_mock, CATALOG_CREDIT)
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [5, 10, 20]},
+        status_code=200,
+    )
+    resp = client.get("/buy")
+    assert resp.status_code == 200
+    assert 'name="credit_starter"' in resp.text
+    assert 'name="credit_pro"' in resp.text
+    assert 'name="credit_trial"' in resp.text
+
+
+def test_buy_pre_selects_package_default_credit(client, httpx_mock):
+    """starter ships default_credit_usd=10, so its $10 radio is pre-checked."""
+    _add_catalog(httpx_mock, CATALOG_CREDIT)
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [5, 10, 20]},
+        status_code=200,
+    )
+    resp = client.get("/buy")
+    idx = resp.text.find('name="credit_starter" value="10"')
+    assert idx >= 0, resp.text
+    assert " checked" in resp.text[idx : idx + 120]
+    for amount in (5, 20):
+        j = resp.text.find(f'name="credit_starter" value="{amount}"')
+        assert j >= 0
+        assert " checked" not in resp.text[j : j + 120]
+
+
+def test_buy_credit_free_package_defaults_to_vps_only(client, httpx_mock):
+    """pro ships default_credit_usd=0, so its VPS-only (value=0) radio is the
+    pre-checked one -- not a paid bundle."""
+    _add_catalog(httpx_mock, CATALOG_CREDIT)
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [5, 10, 20]},
+        status_code=200,
+    )
+    resp = client.get("/buy")
+    idx = resp.text.find('name="credit_pro" value="0"')
+    assert idx >= 0, resp.text
+    assert " checked" in resp.text[idx : idx + 120]
+
+
+def test_buy_default_falls_back_to_closest_when_not_offered(client, httpx_mock):
+    """starter's default_credit is 10, but if the partner only offers [20, 50]
+    the closest offered bundle (20) is pre-picked rather than nothing."""
+    _add_catalog(httpx_mock, CATALOG_CREDIT)
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [20, 50]},
+        status_code=200,
+    )
+    resp = client.get("/buy")
+    idx = resp.text.find('name="credit_starter" value="20"')
+    assert idx >= 0, resp.text
+    assert " checked" in resp.text[idx : idx + 120]
+
+
+def test_buy_shows_combined_total_per_credit_option(client, httpx_mock):
+    """The badge on each credit option is the plan price + credit price, so
+    the buyer sees the real order total without any JS. starter is $15/mo;
+    +$10 credit = $25 total."""
+    _add_catalog(httpx_mock, CATALOG_CREDIT)
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [10]},
+        status_code=200,
+    )
+    resp = client.get("/buy")
+    assert "$25 total" in resp.text
+
+
+def test_buy_post_per_package_credit_field(client, httpx_mock):
+    """The real form posts credit_<slug>; the server bills that amount."""
+    import json as _json
+    _add_catalog(httpx_mock, CATALOG_CREDIT)
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [5, 10, 20]},
+        status_code=200,
+    )
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/orders",
+        json={"checkout_url": "https://stripe.test/pay"},
+        status_code=200,
+    )
+    resp = client.post(
+        "/buy",
+        data={"plan": "starter", "credit_starter": "20"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303, resp.text
+    order_calls = [
+        r for r in httpx_mock.get_requests()
+        if r.url.path.endswith("/orders") and r.method == "POST"
+    ]
+    assert len(order_calls) == 1
+    body = _json.loads(order_calls[0].content.decode())
+    assert body["credit_usd"] == 20
+    assert body["tier"] == "starter"
+
+
+def test_buy_post_per_package_credit_respects_selected_plan(client, httpx_mock):
+    """Only the chosen plan's credit_<slug> is billed; a stale credit field
+    for a different (unselected) plan is ignored."""
+    import json as _json
+    _add_catalog(httpx_mock, CATALOG_CREDIT)
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/settings",
+        json={"allowed_credit_options": [5, 10, 20]},
+        status_code=200,
+    )
+    httpx_mock.add_response(
+        url="http://mintoffice.test/api/v1/orders",
+        json={"checkout_url": "https://stripe.test/pay"},
+        status_code=200,
+    )
+    resp = client.post(
+        "/buy",
+        data={"plan": "starter", "credit_starter": "10", "credit_pro": "50"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303, resp.text
+    order_calls = [
+        r for r in httpx_mock.get_requests()
+        if r.url.path.endswith("/orders") and r.method == "POST"
+    ]
+    body = _json.loads(order_calls[0].content.decode())
+    assert body["credit_usd"] == 10  # credit_starter, not credit_pro

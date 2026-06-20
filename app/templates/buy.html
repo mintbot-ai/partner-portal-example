@@ -7,48 +7,56 @@
     <div class="alert alert-error">{{ error }}</div>
   {% endif %}
 
+  {% set any_credit = plans.values()|selectattr('credit_choices')|list %}
+
   <form method="post" action="/buy" class="card" style="margin-top:1.5rem">
     <fieldset style="border:none;padding:0;margin:0">
       <legend style="padding:0;margin-bottom:0.75rem;color:var(--fg-dim);font-size:0.9375rem;font-weight:500">Plan</legend>
       <div class="plan-choices" style="display:grid;gap:0.625rem">
         {% for slug, plan in plans.items() %}
-          <label class="plan-choice" style="display:flex;align-items:flex-start;gap:0.75rem;padding:0.875rem 1rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-soft);cursor:pointer;margin:0;transition:border-color 120ms ease, background 120ms ease">
-            <input type="radio" name="plan" value="{{ slug }}" required style="margin-top:0.25rem;accent-color:var(--accent)"{% if selected == slug %} checked{% endif %}>
-            <span style="flex:1">
-              <strong style="color:var(--fg);font-weight:600">{{ plan.label }}</strong>
-              <span class="dim" style="display:block;font-size:0.875rem;margin-top:0.125rem">{{ plan.blurb }}</span>
-            </span>
-            <span class="badge">
-              {% if plan.price_cents == 0 %}Free{% else %}{{ plan.price_display }}{% endif %}
-            </span>
-          </label>
+          <div class="plan-block">
+            <label class="plan-choice" style="display:flex;align-items:flex-start;gap:0.75rem;padding:0.875rem 1rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-soft);cursor:pointer;margin:0;transition:border-color 120ms ease, background 120ms ease">
+              <input type="radio" name="plan" value="{{ slug }}" required style="margin-top:0.25rem;accent-color:var(--accent)"{% if selected == slug %} checked{% endif %}>
+              <span style="flex:1">
+                <strong style="color:var(--fg);font-weight:600">{{ plan.label }}</strong>
+                <span class="dim" style="display:block;font-size:0.875rem;margin-top:0.125rem">{{ plan.blurb }}</span>
+              </span>
+              <span class="badge">
+                {% if plan.price_cents == 0 %}Free{% else %}{{ plan.price_display }}{% endif %}
+              </span>
+            </label>
+
+            {% if plan.credit_choices %}
+              <div class="credit-group">
+                <div class="credit-legend">LLM credit — spendable on assistant turns, top up any time</div>
+                {% for c in plan.credit_choices %}
+                  <label class="credit-choice">
+                    <input type="radio" name="credit_{{ slug }}" value="{{ c.usd }}" style="accent-color:var(--accent)"{% if c.usd == plan.credit_default_usd %} checked{% endif %}>
+                    <span style="flex:1">
+                      <strong style="color:var(--fg);font-weight:600">${{ c.usd }} of model credit</strong>
+                      {% if c.add_cents and plan.price_cents %}
+                        <span class="dim" style="display:block;font-size:0.8125rem;margin-top:0.0625rem">+{{ c.add_display }} on top of the plan</span>
+                      {% endif %}
+                    </span>
+                    <span class="badge">{{ c.total_display }}{% if plan.price_cents == 0 and c.add_cents == 0 %}{% else %} total{% endif %}</span>
+                  </label>
+                {% endfor %}
+                <label class="credit-choice">
+                  <input type="radio" name="credit_{{ slug }}" value="0" style="accent-color:var(--accent)"{% if plan.credit_default_usd == 0 %} checked{% endif %}>
+                  <span style="flex:1">
+                    <strong style="color:var(--fg);font-weight:600">No credit — VPS only</strong>
+                    <span class="dim" style="display:block;font-size:0.8125rem;margin-top:0.0625rem">Bring your own Codex or Claude API key after the panel opens.</span>
+                  </span>
+                  <span class="badge">{% if plan.price_cents == 0 %}Free{% else %}{{ plan.price_display }} total{% endif %}</span>
+                </label>
+              </div>
+            {% endif %}
+          </div>
         {% endfor %}
       </div>
     </fieldset>
 
-    {% if credit_options %}
-      <fieldset style="border:none;padding:0;margin:1.5rem 0 0">
-        <legend style="padding:0;margin-bottom:0.75rem;color:var(--fg-dim);font-size:0.9375rem;font-weight:500">LLM credit</legend>
-        <div class="plan-choices" style="display:grid;gap:0.625rem">
-          {% for amount in credit_options %}
-            <label class="plan-choice" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-soft);cursor:pointer;margin:0;transition:border-color 120ms ease, background 120ms ease">
-              <input type="radio" name="credit_usd" value="{{ amount }}" required style="accent-color:var(--accent)"{% if loop.first %} checked{% endif %}>
-              <span style="flex:1">
-                <strong style="color:var(--fg);font-weight:600">${{ amount }} of model credit</strong>
-                <span class="dim" style="display:block;font-size:0.8125rem;margin-top:0.125rem">Spendable on assistant turns. Top up any time later.</span>
-              </span>
-            </label>
-          {% endfor %}
-          <label class="plan-choice" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-soft);cursor:pointer;margin:0;transition:border-color 120ms ease, background 120ms ease">
-            <input type="radio" name="credit_usd" value="0" style="accent-color:var(--accent)">
-            <span style="flex:1">
-              <strong style="color:var(--fg);font-weight:600">No credit — VPS only</strong>
-              <span class="dim" style="display:block;font-size:0.8125rem;margin-top:0.125rem">Bring your own Codex or Claude API key after the panel opens.</span>
-            </span>
-          </label>
-        </div>
-      </fieldset>
-    {% else %}
+    {% if not any_credit %}
       <input type="hidden" name="credit_usd" value="0">
       <p class="muted" style="margin-top:1rem;font-size:0.8125rem">
         VPS only — add your own Codex or Claude API key after the panel opens.
@@ -74,6 +82,14 @@
 
   <style>
     .plan-choice:hover { border-color: var(--accent) !important; background: var(--bg-elev) !important; }
-    .plan-choice:has(input:checked) { border-color: var(--accent) !important; background: rgba(124, 92, 255, 0.06) !important; }
+    .plan-block:has(input[name="plan"]:checked) .plan-choice { border-color: var(--accent) !important; background: rgba(124, 92, 255, 0.06) !important; }
+    /* Per-package credit picker -- revealed only for the chosen plan. No JS:
+       the live total on each option is precomputed server-side. */
+    .credit-group { display: none; margin: 0.5rem 0 0.25rem 1.75rem; gap: 0.5rem; }
+    .plan-block:has(input[name="plan"]:checked) .credit-group { display: grid; }
+    .credit-legend { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin: 0.25rem 0; }
+    .credit-choice { display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 0.875rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); cursor: pointer; margin: 0; transition: border-color 120ms ease, background 120ms ease; }
+    .credit-choice:hover { border-color: var(--accent) !important; background: var(--bg-soft) !important; }
+    .credit-choice:has(input:checked) { border-color: var(--accent) !important; background: rgba(124, 92, 255, 0.06) !important; }
   </style>
 {% endblock %}

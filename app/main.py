@@ -263,6 +263,8 @@ def _order_plans() -> dict[str, dict]:
     """
     catalog = _get_catalog()
     currency = str(catalog.get("currency") or "usd")
+    options = _get_credit_options()
+    price_map = _credit_price_cents_map(catalog)
     plans: dict[str, dict] = {}
     for pkg in catalog.get("packages") or []:
         slug = str(pkg["tier"])
@@ -273,6 +275,10 @@ def _order_plans() -> dict[str, dict]:
         blurb = str(pkg.get("description") or "")
         label, blurb = _apply_overrides(slug, label, blurb)
         price_cents = int(dur.get("price_cents") or 0)
+        default_credit = int(pkg.get("default_credit_usd") or 0)
+        choices, default_usd = _credit_choices(
+            price_cents, default_credit, options, price_map, currency,
+        )
         plans[slug] = {
             "label": label,
             "tier": slug,
@@ -281,8 +287,71 @@ def _order_plans() -> dict[str, dict]:
             "price_display": _format_money(price_cents, currency),
             "blurb": blurb,
             "featured": bool(pkg.get("featured")),
+            # Per-package credit: the bundles the partner offers, each priced
+            # in the partner currency with the COMBINED order total (plan +
+            # credit) precomputed so the card shows a live, JS-free total.
+            "credit_choices": choices,
+            "credit_default_usd": default_usd,
+            "default_credit": default_credit,
         }
     return plans
+
+
+def _credit_price_cents_map(catalog: dict) -> dict[int, int]:
+    """``{usd: price_cents}`` for the credit add-on, from the live catalog's
+    ``credit_options`` (already converted to the partner currency by
+    MintOffice). Empty when the field is missing (older MintOffice) -- the
+    storefront then prices credit at 0 rather than crashing, and the
+    server-side allow-list still gates what's actually buyable."""
+    out: dict[int, int] = {}
+    for o in catalog.get("credit_options") or []:
+        if not isinstance(o, dict):
+            continue
+        try:
+            out[int(o["usd"])] = int(o["price_cents"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _credit_choices(
+    plan_price_cents: int,
+    default_credit: int,
+    options: list[int],
+    price_map: dict[int, int],
+    currency: str,
+) -> tuple[list[dict], int]:
+    """Build the per-package credit radio list + the pre-selected bundle.
+
+    ``options`` is the partner's allowed bundle subset (GET /settings).
+    Each choice carries the credit add-on price AND the combined order
+    total (plan + credit) so the card can show the real total per option
+    without any client-side maths.
+
+    Default selection -- the "nice" pre-pick the partner gets out of the
+    box: the package's own ``default_credit`` when the partner still
+    offers it; otherwise the closest offered bundle; and 0 (VPS-only) when
+    the package ships credit-free or the partner sells no credit at all.
+    """
+    opts = sorted({int(o) for o in options if int(o) > 0})
+    choices: list[dict] = []
+    for usd in opts:
+        add_cents = int(price_map.get(usd, 0))
+        total_cents = plan_price_cents + add_cents
+        choices.append({
+            "usd": usd,
+            "add_cents": add_cents,
+            "add_display": _format_money(add_cents, currency),
+            "total_cents": total_cents,
+            "total_display": _format_money(total_cents, currency),
+        })
+    if default_credit in opts:
+        default_usd = default_credit
+    elif default_credit and opts:
+        default_usd = min(opts, key=lambda x: (abs(x - default_credit), x))
+    else:
+        default_usd = 0
+    return choices, default_usd
 
 
 def _subscription_plans() -> dict[str, dict]:
@@ -442,17 +511,26 @@ def buy_form(request: Request, plan: str | None = None) -> HTMLResponse:
 
 
 @app.post("/buy")
-def buy_submit(
-    request: Request,
-    plan: str = Form(...),
-    language: str = Form("en"),
-    credit_usd: int = Form(0),
-    idempotency_key_form: str = Form(""),
-) -> Response:
+async def buy_submit(request: Request) -> Response:
+    # Credit is now chosen PER PACKAGE, so the field name is credit_<slug>
+    # (each plan card carries its own radio group + default). We read the
+    # form manually to pull the chosen plan's field; a bare ``credit_usd``
+    # is still honoured as a fallback for older clients / direct API posts.
+    form = await request.form()
+    plan = str(form.get("plan") or "")
+    language = str(form.get("language") or "en")
+    idempotency_key_form = str(form.get("idempotency_key_form") or "")
     plans = _order_plans()
     spec = plans.get(plan)
     if not spec:
         raise HTTPException(status_code=422, detail=f"unknown plan: {plan}")
+    raw_credit = form.get(f"credit_{plan}")
+    if raw_credit is None:
+        raw_credit = form.get("credit_usd", "0")
+    try:
+        credit_usd = int(str(raw_credit).strip() or 0)
+    except (TypeError, ValueError):
+        credit_usd = 0
     if credit_usd < 0:
         credit_usd = 0
     options = _get_credit_options()
