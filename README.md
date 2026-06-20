@@ -226,13 +226,14 @@ identity) is a separate skin shipped from a different repo:
 
 > **[`mintbot-ai/agent-template`](https://github.com/mintbot-ai/agent-template)** — fork this to skin the agent's panel and rewrite its persona.
 
-That repo defines three files mintbot pulls at agent deploy time:
+That repo is cloned onto the customer's agent VPS at deploy time, where its `install.sh` applies your customization. It carries:
 
 | File | Purpose |
 |------|---------|
 | `theme/theme.css` + `theme/theme.json` (+ optional `theme.js`) | Panel look & feel — colours, type, radius, layout tweaks. |
-| `persona/system_prompt.md.j2` | **Full persona override** — Jinja2 template that REPLACES mintbot's bundled assistant persona. The starter file is a fully-worked ExampleAI persona you can adapt; on a real white-label deploy the agent never says "mintbot" in chat, only your brand name. |
-| `persona/brand_layer.md`      | Short voice & tone overlay — *appended* on top of whichever persona is active. Use this if `system_prompt.md.j2` is too heavy and you just want a few voice notes. |
+| `persona/soul.full.md` | **Full persona override** — replaces mintbot's bundled assistant persona end-to-end. The starter file is a fully-worked ExampleAI persona you can adapt; on a real white-label deploy the agent never says "mintbot" in chat, only your brand name. Two placeholders (`${AGENT_ID}`, `${BRAND_DOMAIN}`) are filled in when it's applied. |
+| `persona/brand_layer.md`      | Short voice & tone overlay — *appended* on top of whichever persona is active. A few extra voice notes on top of the full persona. |
+| `install.sh` / `update.sh` | Run on the agent's **own VPS** (once post-deploy / after each base update) to apply the theme and persona. mintbot's central servers never execute them. |
 
 End-to-end picture:
 
@@ -243,31 +244,33 @@ End-to-end picture:
 │                          │       │                          │
 │ • landing + plan picker  │       │ • theme/theme.css        │
 │ • Stripe checkout        │       │ • theme/theme.json       │
-│ • webhook receiver       │       │ • persona/*.md(.j2)      │
+│ • webhook receiver       │       │ • persona/*.md           │
+│                          │       │ • install.sh / update.sh │
 └──────────────┬───────────┘       └─────────────┬────────────┘
-               │ POST /api/v1/orders             │
-               │                                 │ git clone (deploy)
+               │ POST /api/v1/orders             │ repo URL only
                ▼                                 ▼
         ┌──────────────────────────────────────────────┐
         │ MintOffice  (mint.mintbot.ai / .dev)         │
         │ — provisions the agent VPS                   │
-        │ — splices your theme into the panel          │
-        │ — renders your persona into the SOUL.md      │
+        │ — validates + stores your repo URL           │
+        │ — hands the URL to the VPS (runs nothing)    │
         └──────────────────────────────────────────────┘
                             │
                             ▼
-                ┌──────────────────────┐
-                │ agentNNN.mintbot.ai  │  ← the customer's running agent
-                │ (panel + chat)       │     wearing your brand
-                └──────────────────────┘
+                ┌────────────────────────────────────┐
+                │ agentNNN.mintbot.ai                │  ← the customer's agent
+                │ clones the repo on its OWN VPS and │     wearing your brand
+                │ runs install.sh → theme + persona  │
+                └────────────────────────────────────┘
 ```
 
 You can ship this storefront WITHOUT a custom `agent-template` fork —
 the customer just gets the default mintbot-styled panel and persona.
 For a true white-label experience where the agent itself wears your
 brand, fork `mintbot-ai/agent-template`, point your partner row at it
-in MintOffice (`Settings → Template` field), and the next deploy picks
-it up. See that repo's `docs/customizing.md` and `docs/publishing.md`
+in MintOffice (`Settings → Customization repo` field), and the next
+deploy clones it onto the agent's VPS and runs `install.sh`. See that
+repo's `docs/theming.md`, `docs/persona.md` and `docs/publishing.md`
 for the full walkthrough.
 
 ## Troubleshooting
