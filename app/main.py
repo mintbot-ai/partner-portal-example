@@ -86,7 +86,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=f"{settings.partner_brand} — Brand Partner reference portal",
     version=__version__,
-    docs_url=None, redoc_url=None,
+    # Swagger/ReDoc/OpenAPI are off unless EXPOSE_API_DOCS is set: the schema
+    # enumerates every route + model to anonymous callers, which is needless
+    # attack surface on a public storefront.
+    docs_url="/docs" if settings.expose_api_docs else None,
+    redoc_url="/redoc" if settings.expose_api_docs else None,
+    openapi_url="/openapi.json" if settings.expose_api_docs else None,
     lifespan=lifespan,
 )
 
@@ -128,7 +133,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app.add_middleware(SecurityHeadersMiddleware)
+# Skip the app-level headers when a fronting proxy already sets them, so a
+# deployment doesn't ship two Strict-Transport-Security / CSP lines.
+if settings.security_headers:
+    app.add_middleware(SecurityHeadersMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -461,31 +469,22 @@ def _render(request: Request, template: str, ctx: dict, *, status_code: int = 20
 def healthz() -> Response:
     """Liveness + configuration probe.
 
-    ``checks.db`` is a real SQLite read+write. ``checks.mintoffice_api_key``
-    is a pure config check ("is the bearer token set in .env") — it does
-    NOT call MintOffice, so a MintOffice outage won't make this portal
-    flap. Detecting a missing/empty key is the case that bit us in prod
-    (rotation cleared .env, POST /buy started 502'ing) and is exactly
-    what generic uptime monitors miss when they only watch the landing
-    page or DB.
+    Runs a real SQLite read+write AND a config check that the MintOffice
+    bearer token is set in .env (a pure ``is it configured`` check — it does
+    NOT call MintOffice, so a MintOffice outage won't make this portal flap).
+    Detecting a missing/empty key is the case that bit us in prod (rotation
+    cleared .env, POST /buy started 502'ing) and is exactly what generic
+    uptime monitors miss when they only watch the landing page or DB.
 
-    Returns 503 when any check fails so a vanilla "GET /healthz, expect
-    2xx" monitor catches both DB outages and configuration drift.
+    The response BODY is intentionally minimal — just ``{"status": ...}`` —
+    because /healthz is public and unauthenticated. The 200-vs-503 status IS
+    the signal a monitor needs; leaking the brand, exact version, and which
+    internal check failed only helps someone fingerprint the deployment.
     """
     db_ok = db.healthcheck()
-    api_key_state = "configured" if settings.mintoffice_api_key else "missing"
-    ok = db_ok and api_key_state == "configured"
-    payload = {
-        "ok": ok,
-        "brand": settings.partner_brand,
-        "version": __version__,
-        "checks": {
-            "db": db_ok,
-            "mintoffice_api_key": api_key_state,
-        },
-    }
+    ok = db_ok and bool(settings.mintoffice_api_key)
     return Response(
-        content=json.dumps(payload),
+        content=json.dumps({"status": "ok" if ok else "unhealthy"}),
         media_type="application/json",
         status_code=200 if ok else 503,
     )

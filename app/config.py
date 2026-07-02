@@ -22,6 +22,14 @@ class Settings:
     admin_password: str
     admin_page_size: int
     db_path: str
+    expose_api_docs: bool
+    security_headers: bool
+
+
+def _bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _int(value: str, default: int, *, lo: int = 0, hi: int | None = None) -> int:
@@ -69,6 +77,16 @@ def _load() -> Settings:
             os.environ.get("ADMIN_PAGE_SIZE", "50"), 50, lo=1, hi=500,
         ),
         db_path=os.environ.get("DB_PATH", "portal.db").strip(),
+        # Swagger UI + ReDoc + /openapi.json. Off by default: the schema
+        # enumerates every route and its models to unauthenticated callers,
+        # which is needless attack-surface on a public storefront. Flip on
+        # only while developing against the API.
+        expose_api_docs=_bool(os.environ.get("EXPOSE_API_DOCS"), False),
+        # Emit the defence-in-depth security headers from the app itself.
+        # On by default so the portal is safe standalone; set false when a
+        # fronting proxy (nginx/Caddy) already sets these headers, so they
+        # aren't duplicated (e.g. two Strict-Transport-Security lines).
+        security_headers=_bool(os.environ.get("SECURITY_HEADERS"), True),
     )
 
 

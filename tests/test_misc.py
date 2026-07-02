@@ -29,11 +29,11 @@ def test_healthz_reports_db_state(app_with_tmp_db):
     r = client.get("/healthz")
     assert r.status_code == 200
     body = r.json()
-    assert body["ok"] is True
-    assert body["checks"]["db"] is True
-    assert body["checks"]["mintoffice_api_key"] == "configured"
-    assert body["version"]
-    assert body["brand"]
+    assert body == {"status": "ok"}
+    # The public body must NOT fingerprint the deployment.
+    assert "brand" not in body
+    assert "version" not in body
+    assert "checks" not in body
 
 
 def test_healthz_503_when_db_broken(app_with_tmp_db, monkeypatch):
@@ -41,9 +41,7 @@ def test_healthz_503_when_db_broken(app_with_tmp_db, monkeypatch):
     client = TestClient(app_with_tmp_db.app)
     r = client.get("/healthz")
     assert r.status_code == 503
-    body = r.json()
-    assert body["ok"] is False
-    assert body["checks"]["db"] is False
+    assert r.json() == {"status": "unhealthy"}
 
 
 def test_healthz_503_when_mintoffice_api_key_missing(app_with_tmp_db, monkeypatch):
@@ -54,10 +52,7 @@ def test_healthz_503_when_mintoffice_api_key_missing(app_with_tmp_db, monkeypatc
     client = TestClient(app_with_tmp_db.app)
     r = client.get("/healthz")
     assert r.status_code == 503
-    body = r.json()
-    assert body["ok"] is False
-    assert body["checks"]["db"] is True
-    assert body["checks"]["mintoffice_api_key"] == "missing"
+    assert r.json() == {"status": "unhealthy"}
 
 
 def test_404_renders_branded_html_for_browsers(app_with_tmp_db):
@@ -154,3 +149,46 @@ def test_landing_renders_prices_for_priced_plans(app_with_tmp_db):
     assert "Free" in r.text
     # Recommended ribbon present on the featured plan.
     assert "Recommended" in r.text
+
+
+def _reload_with_env(tmp_path, monkeypatch, **extra):
+    import sys
+    from pathlib import Path
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "portal.db"))
+    monkeypatch.setenv("PARTNER_BRAND", "ExampleAI")
+    monkeypatch.setenv("MINTOFFICE_API_URL", "https://mint.example.test")
+    monkeypatch.setenv("MINTOFFICE_API_KEY", "mo_live_testkey")
+    monkeypatch.setenv("MINTOFFICE_WEBHOOK_SECRET", "whsec_testsecret")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-pw")
+    for k, v in extra.items():
+        monkeypatch.setenv(k, v)
+    for mod in list(sys.modules):
+        if mod.startswith("app"):
+            del sys.modules[mod]
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import app.main as main_mod
+    main_mod.db.init_db()
+    return main_mod
+
+
+def test_openapi_and_docs_hidden_by_default(app_with_tmp_db):
+    client = TestClient(app_with_tmp_db.app)
+    assert client.get("/openapi.json").status_code == 404
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+
+
+def test_openapi_exposed_when_env_flag_set(tmp_path, monkeypatch):
+    main_mod = _reload_with_env(tmp_path, monkeypatch, EXPOSE_API_DOCS="true")
+    client = TestClient(main_mod.app)
+    assert client.get("/openapi.json").status_code == 200
+    assert client.get("/docs").status_code == 200
+
+
+def test_security_headers_can_be_disabled_for_proxy(tmp_path, monkeypatch):
+    main_mod = _reload_with_env(tmp_path, monkeypatch, SECURITY_HEADERS="false")
+    client = TestClient(main_mod.app)
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    # With the app layer off, a fronting proxy owns the headers (no duplication).
+    assert "content-security-policy" not in {k.lower() for k in r.headers}
